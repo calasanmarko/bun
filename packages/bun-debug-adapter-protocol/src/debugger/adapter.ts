@@ -1226,7 +1226,8 @@ export abstract class BaseDebugAdapter<T extends Inspector = Inspector>
   }
 
   async ["Debugger.scriptParsed"](event: JSC.Debugger.ScriptParsedEvent): Promise<void> {
-    const { url, scriptId, sourceMapURL } = event;
+    const { scriptId, sourceMapURL } = event;
+    const url = event.url || event.sourceURL;
 
     // If no url is present, the script is from a `evaluate` request.
     if (!url) {
