@@ -1,29 +1,14 @@
-const EditorContext = @import("../open.zig").EditorContext;
-const Blob = JSC.WebCore.Blob;
-const default_allocator = bun.default_allocator;
-const Output = bun.Output;
 const RareData = @This();
-const Syscall = bun.sys;
-const JSC = bun.JSC;
-const std = @import("std");
-const BoringSSL = bun.BoringSSL;
-const bun = @import("root").bun;
-const FDImpl = bun.FDImpl;
-const Environment = bun.Environment;
-const WebSocketClientMask = @import("../http/websocket_http_client.zig").Mask;
-const UUID = @import("./uuid.zig");
-const Async = bun.Async;
-const StatWatcherScheduler = @import("./node/node_fs_stat_watcher.zig").StatWatcherScheduler;
-const IPC = @import("./ipc.zig");
-const uws = bun.uws;
 
+websocket_deflate: ?*WebSocketDeflate.RareData = null,
 boring_ssl_engine: ?*BoringSSL.ENGINE = null,
 editor_context: EditorContext = EditorContext{},
 stderr_store: ?*Blob.Store = null,
 stdin_store: ?*Blob.Store = null,
 stdout_store: ?*Blob.Store = null,
 
-postgresql_context: JSC.Postgres.PostgresSQLContext = .{},
+mysql_context: bun.api.MySQL.MySQLContext = .{},
+postgresql_context: bun.api.Postgres.PostgresSQLContext = .{},
 
 entropy_cache: ?*EntropyCache = null,
 
@@ -35,13 +20,13 @@ cleanup_hooks: std.ArrayListUnmanaged(CleanupHook) = .{},
 
 file_polls_: ?*Async.FilePoll.Store = null,
 
-global_dns_data: ?*JSC.DNS.GlobalData = null,
+global_dns_data: ?*bun.api.dns.GlobalData = null,
 
 spawn_ipc_usockets_context: ?*uws.SocketContext = null,
 
 mime_types: ?bun.http.MimeType.Map = null,
 
-node_fs_stat_watcher_scheduler: ?*StatWatcherScheduler = null,
+node_fs_stat_watcher_scheduler: ?bun.ptr.RefPtr(StatWatcherScheduler) = null,
 
 listening_sockets_for_watch_mode: std.ArrayListUnmanaged(bun.FileDescriptor) = .{},
 listening_sockets_for_watch_mode_lock: bun.Mutex = .{},
@@ -50,7 +35,14 @@ temp_pipe_read_buffer: ?*PipeReadBuffer = null,
 
 aws_signature_cache: AWSSignatureCache = .{},
 
-s3_default_client: JSC.Strong = .{},
+s3_default_client: jsc.Strong.Optional = .empty,
+default_csrf_secret: []const u8 = "",
+
+valkey_context: ValkeyContext = .{},
+
+tls_default_ciphers: ?[:0]const u8 = null,
+
+#spawn_sync_event_loop: bun.ptr.Owned(?*SpawnSyncEventLoop) = .initNull(),
 
 const PipeReadBuffer = [256 * 1024]u8;
 const DIGESTED_HMAC_256_LEN = 32;
@@ -90,7 +82,7 @@ pub const AWSSignatureCache = struct {
             this.clean();
         }
         this.date = numeric_day;
-        this.cache.put(bun.default_allocator.dupe(u8, key) catch bun.outOfMemory(), value) catch bun.outOfMemory();
+        bun.handleOom(this.cache.put(bun.handleOom(bun.default_allocator.dupe(u8, key)), value));
     }
     pub fn deinit(this: *@This()) void {
         this.date = 0;
@@ -105,7 +97,7 @@ pub fn awsCache(this: *RareData) *AWSSignatureCache {
 
 pub fn pipeReadBuffer(this: *RareData) *PipeReadBuffer {
     return this.temp_pipe_read_buffer orelse {
-        this.temp_pipe_read_buffer = default_allocator.create(PipeReadBuffer) catch bun.outOfMemory();
+        this.temp_pipe_read_buffer = bun.handleOom(default_allocator.create(PipeReadBuffer));
         return this.temp_pipe_read_buffer.?;
     };
 }
@@ -130,7 +122,7 @@ pub fn closeAllListenSocketsForWatchMode(this: *RareData) void {
     for (this.listening_sockets_for_watch_mode.items) |socket| {
         // Prevent TIME_WAIT state
         Syscall.disableLinger(socket);
-        _ = Syscall.close(socket);
+        socket.close();
     }
     this.listening_sockets_for_watch_mode = .{};
 }
@@ -147,22 +139,26 @@ pub fn mimeTypeFromString(this: *RareData, allocator: std.mem.Allocator, str: []
     if (this.mime_types == null) {
         this.mime_types = bun.http.MimeType.createHashTable(
             allocator,
-        ) catch bun.outOfMemory();
+        ) catch |err| bun.handleOom(err);
     }
 
-    return this.mime_types.?.get(str);
+    if (this.mime_types.?.get(str)) |entry| {
+        return bun.http.MimeType.Compact.from(entry).toMimeType();
+    }
+
+    return null;
 }
 
 pub const HotMap = struct {
     _map: bun.StringArrayHashMap(Entry),
 
-    const HTTPServer = JSC.API.HTTPServer;
-    const HTTPSServer = JSC.API.HTTPSServer;
-    const DebugHTTPServer = JSC.API.DebugHTTPServer;
-    const DebugHTTPSServer = JSC.API.DebugHTTPSServer;
-    const TCPSocket = JSC.API.TCPSocket;
-    const TLSSocket = JSC.API.TLSSocket;
-    const Listener = JSC.API.Listener;
+    const HTTPServer = jsc.API.HTTPServer;
+    const HTTPSServer = jsc.API.HTTPSServer;
+    const DebugHTTPServer = jsc.API.DebugHTTPServer;
+    const DebugHTTPSServer = jsc.API.DebugHTTPSServer;
+    const TCPSocket = jsc.API.TCPSocket;
+    const TLSSocket = jsc.API.TLSSocket;
+    const Listener = jsc.API.Listener;
     const Entry = bun.TaggedPointerUnion(.{
         HTTPServer,
         HTTPSServer,
@@ -189,23 +185,26 @@ pub const HotMap = struct {
     }
 
     pub fn insert(this: *HotMap, key: []const u8, ptr: anytype) void {
-        const entry = this._map.getOrPut(key) catch bun.outOfMemory();
+        const entry = bun.handleOom(this._map.getOrPut(key));
         if (entry.found_existing) {
             @panic("HotMap already contains key");
         }
 
-        entry.key_ptr.* = this._map.allocator.dupe(u8, key) catch bun.outOfMemory();
+        entry.key_ptr.* = bun.handleOom(this._map.allocator.dupe(u8, key));
         entry.value_ptr.* = Entry.init(ptr);
     }
 
     pub fn remove(this: *HotMap, key: []const u8) void {
         const entry = this._map.getEntry(key) orelse return;
-        bun.default_allocator.free(entry.key_ptr.*);
+        const key_to_free = entry.key_ptr.*;
+        const is_same_slice = key_to_free.ptr == key.ptr and key_to_free.len == key.len;
         _ = this._map.orderedRemove(key);
+        bun.debugAssert(!is_same_slice);
+        bun.default_allocator.free(key_to_free);
     }
 };
 
-pub fn filePolls(this: *RareData, vm: *JSC.VirtualMachine) *Async.FilePoll.Store {
+pub fn filePolls(this: *RareData, vm: *jsc.VirtualMachine) *Async.FilePoll.Store {
     return this.file_polls_ orelse {
         this.file_polls_ = vm.allocator.create(Async.FilePoll.Store) catch unreachable;
         this.file_polls_.?.* = Async.FilePoll.Store.init();
@@ -244,7 +243,7 @@ pub const EntropyCache = struct {
     }
 
     pub fn fill(this: *EntropyCache) void {
-        bun.rand(&this.cache);
+        bun.csprng(&this.cache);
         this.index = 0;
     }
 
@@ -274,7 +273,7 @@ pub const EntropyCache = struct {
 pub const CleanupHook = struct {
     ctx: ?*anyopaque,
     func: Function,
-    globalThis: *JSC.JSGlobalObject,
+    globalThis: *jsc.JSGlobalObject,
 
     pub fn eql(self: CleanupHook, other: CleanupHook) bool {
         return self.ctx == other.ctx and self.func == other.func and self.globalThis == other.globalThis;
@@ -285,7 +284,7 @@ pub const CleanupHook = struct {
     }
 
     pub fn init(
-        globalThis: *JSC.JSGlobalObject,
+        globalThis: *jsc.JSGlobalObject,
         ctx: ?*anyopaque,
         func: CleanupHook.Function,
     ) CleanupHook {
@@ -296,16 +295,16 @@ pub const CleanupHook = struct {
         };
     }
 
-    pub const Function = *const fn (?*anyopaque) callconv(.C) void;
+    pub const Function = *const fn (?*anyopaque) callconv(.c) void;
 };
 
 pub fn pushCleanupHook(
     this: *RareData,
-    globalThis: *JSC.JSGlobalObject,
+    globalThis: *jsc.JSGlobalObject,
     ctx: ?*anyopaque,
     func: CleanupHook.Function,
 ) void {
-    this.cleanup_hooks.append(bun.default_allocator, CleanupHook.init(globalThis, ctx, func)) catch bun.outOfMemory();
+    bun.handleOom(this.cleanup_hooks.append(bun.default_allocator, CleanupHook.init(globalThis, ctx, func)));
 }
 
 pub fn boringEngine(rare: *RareData) *BoringSSL.ENGINE {
@@ -316,10 +315,10 @@ pub fn boringEngine(rare: *RareData) *BoringSSL.ENGINE {
 }
 
 pub fn stderr(rare: *RareData) *Blob.Store {
-    bun.Analytics.Features.@"Bun.stderr" += 1;
+    bun.analytics.Features.@"Bun.stderr" += 1;
     return rare.stderr_store orelse brk: {
         var mode: bun.Mode = 0;
-        const fd = if (Environment.isWindows) FDImpl.fromUV(2).encode() else bun.STDERR_FD;
+        const fd = bun.FD.fromUV(2);
 
         switch (Syscall.fstat(fd)) {
             .result => |stat| {
@@ -332,7 +331,7 @@ pub fn stderr(rare: *RareData) *Blob.Store {
             .ref_count = std.atomic.Value(u32).init(2),
             .allocator = default_allocator,
             .data = .{
-                .file = Blob.FileStore{
+                .file = .{
                     .pathlike = .{
                         .fd = fd,
                     },
@@ -348,10 +347,10 @@ pub fn stderr(rare: *RareData) *Blob.Store {
 }
 
 pub fn stdout(rare: *RareData) *Blob.Store {
-    bun.Analytics.Features.@"Bun.stdout" += 1;
+    bun.analytics.Features.@"Bun.stdout" += 1;
     return rare.stdout_store orelse brk: {
         var mode: bun.Mode = 0;
-        const fd = if (Environment.isWindows) FDImpl.fromUV(1).encode() else bun.STDOUT_FD;
+        const fd = bun.FD.fromUV(1);
 
         switch (Syscall.fstat(fd)) {
             .result => |stat| {
@@ -363,7 +362,7 @@ pub fn stdout(rare: *RareData) *Blob.Store {
             .ref_count = std.atomic.Value(u32).init(2),
             .allocator = default_allocator,
             .data = .{
-                .file = Blob.FileStore{
+                .file = .{
                     .pathlike = .{
                         .fd = fd,
                     },
@@ -378,10 +377,10 @@ pub fn stdout(rare: *RareData) *Blob.Store {
 }
 
 pub fn stdin(rare: *RareData) *Blob.Store {
-    bun.Analytics.Features.@"Bun.stdin" += 1;
+    bun.analytics.Features.@"Bun.stdin" += 1;
     return rare.stdin_store orelse brk: {
         var mode: bun.Mode = 0;
-        const fd = if (Environment.isWindows) FDImpl.fromUV(0).encode() else bun.STDIN_FD;
+        const fd = bun.FD.fromUV(0);
 
         switch (Syscall.fstat(fd)) {
             .result => |stat| {
@@ -393,11 +392,9 @@ pub fn stdin(rare: *RareData) *Blob.Store {
             .allocator = default_allocator,
             .ref_count = std.atomic.Value(u32).init(2),
             .data = .{
-                .file = Blob.FileStore{
-                    .pathlike = .{
-                        .fd = fd,
-                    },
-                    .is_atty = if (bun.STDIN_FD.isValid()) std.posix.isatty(bun.STDIN_FD.cast()) else false,
+                .file = .{
+                    .pathlike = .{ .fd = fd },
+                    .is_atty = if (fd.unwrapValid()) |valid| std.posix.isatty(valid.native()) else false,
                     .mode = mode,
                 },
             },
@@ -413,7 +410,7 @@ const StdinFdType = enum(i32) {
     socket = 2,
 };
 
-pub export fn Bun__Process__getStdinFdType(vm: *JSC.VirtualMachine, fd: i32) StdinFdType {
+pub export fn Bun__Process__getStdinFdType(vm: *jsc.VirtualMachine, fd: i32) StdinFdType {
     const mode = switch (fd) {
         0 => vm.rareData().stdin().data.file.mode,
         1 => vm.rareData().stdout().data.file.mode,
@@ -429,42 +426,81 @@ pub export fn Bun__Process__getStdinFdType(vm: *JSC.VirtualMachine, fd: i32) Std
     }
 }
 
-const Subprocess = @import("./api/bun/subprocess.zig").Subprocess;
+fn setTLSDefaultCiphersFromJS(globalThis: *jsc.JSGlobalObject, callframe: *jsc.CallFrame) bun.JSError!jsc.JSValue {
+    const vm = globalThis.bunVM();
+    const args = callframe.arguments();
+    const ciphers = if (args.len > 0) args[0] else .js_undefined;
+    if (!ciphers.isString()) return globalThis.throwInvalidArgumentTypeValue("ciphers", "string", ciphers);
+    var sliced = try ciphers.toSlice(globalThis, bun.default_allocator);
+    defer sliced.deinit();
+    vm.rareData().setTLSDefaultCiphers(sliced.slice());
+    return .js_undefined;
+}
 
-pub fn spawnIPCContext(rare: *RareData, vm: *JSC.VirtualMachine) *uws.SocketContext {
+fn getTLSDefaultCiphersFromJS(globalThis: *jsc.JSGlobalObject, _: *jsc.CallFrame) bun.JSError!jsc.JSValue {
+    const vm = globalThis.bunVM();
+    const ciphers = vm.rareData().tlsDefaultCiphers() orelse return try bun.String.createUTF8ForJS(globalThis, bun.uws.get_default_ciphers());
+
+    return try bun.String.createUTF8ForJS(globalThis, ciphers);
+}
+
+comptime {
+    const js_setTLSDefaultCiphers = jsc.toJSHostFn(setTLSDefaultCiphersFromJS);
+    @export(&js_setTLSDefaultCiphers, .{ .name = "Bun__setTLSDefaultCiphers" });
+    const js_getTLSDefaultCiphers = jsc.toJSHostFn(getTLSDefaultCiphersFromJS);
+    @export(&js_getTLSDefaultCiphers, .{ .name = "Bun__getTLSDefaultCiphers" });
+}
+
+pub fn spawnIPCContext(rare: *RareData, vm: *jsc.VirtualMachine) *uws.SocketContext {
     if (rare.spawn_ipc_usockets_context) |ctx| {
         return ctx;
     }
 
-    const opts: uws.us_socket_context_options_t = .{};
-    const ctx = uws.us_create_socket_context(0, vm.event_loop_handle.?, @sizeOf(usize), opts).?;
-    IPC.Socket.configure(ctx, true, *Subprocess, Subprocess.IPCHandler);
+    const ctx = uws.SocketContext.createNoSSLContext(vm.event_loop_handle.?, @sizeOf(usize)).?;
+    IPC.Socket.configure(ctx, true, *IPC.SendQueue, IPC.IPCHandlers.PosixSocket);
     rare.spawn_ipc_usockets_context = ctx;
     return ctx;
 }
 
-pub fn globalDNSResolver(rare: *RareData, vm: *JSC.VirtualMachine) *JSC.DNS.DNSResolver {
+pub fn globalDNSResolver(rare: *RareData, vm: *jsc.VirtualMachine) *api.dns.Resolver {
     if (rare.global_dns_data == null) {
-        rare.global_dns_data = JSC.DNS.GlobalData.init(vm.allocator, vm);
+        rare.global_dns_data = api.dns.GlobalData.init(vm.allocator, vm);
         rare.global_dns_data.?.resolver.ref(); // live forever
     }
 
     return &rare.global_dns_data.?.resolver;
 }
 
-pub fn nodeFSStatWatcherScheduler(rare: *RareData, vm: *JSC.VirtualMachine) *StatWatcherScheduler {
-    return rare.node_fs_stat_watcher_scheduler orelse {
-        rare.node_fs_stat_watcher_scheduler = StatWatcherScheduler.init(vm.allocator, vm);
-        return rare.node_fs_stat_watcher_scheduler.?;
-    };
+pub fn nodeFSStatWatcherScheduler(rare: *RareData, vm: *jsc.VirtualMachine) bun.ptr.RefPtr(StatWatcherScheduler) {
+    return (rare.node_fs_stat_watcher_scheduler orelse init: {
+        rare.node_fs_stat_watcher_scheduler = StatWatcherScheduler.init(vm);
+        break :init rare.node_fs_stat_watcher_scheduler.?;
+    }).dupeRef();
 }
 
-pub fn s3DefaultClient(rare: *RareData, globalThis: *JSC.JSGlobalObject) JSC.JSValue {
+pub fn s3DefaultClient(rare: *RareData, globalThis: *jsc.JSGlobalObject) jsc.JSValue {
     return rare.s3_default_client.get() orelse {
         const vm = globalThis.bunVM();
-        var aws_options = bun.S3.S3Credentials.getCredentialsWithOptions(vm.transpiler.env.getS3Credentials(), .{}, null, null, null, globalThis) catch bun.outOfMemory();
+        var aws_options = bun.S3.S3Credentials.getCredentialsWithOptions(
+            vm.transpiler.env.getS3Credentials(),
+            .{},
+            null,
+            null,
+            null,
+            globalThis,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => bun.outOfMemory(),
+            error.JSError => {
+                globalThis.reportActiveExceptionAsUnhandled(err);
+                return .js_undefined;
+            },
+            error.JSTerminated => {
+                globalThis.reportActiveExceptionAsUnhandled(err);
+                return .js_undefined;
+            },
+        };
         defer aws_options.deinit();
-        const client = JSC.WebCore.S3Client.new(.{
+        const client = jsc.WebCore.S3Client.new(.{
             .credentials = aws_options.credentials.dupe(),
             .options = aws_options.options,
             .acl = aws_options.acl,
@@ -472,9 +508,29 @@ pub fn s3DefaultClient(rare: *RareData, globalThis: *JSC.JSGlobalObject) JSC.JSV
         });
         const js_client = client.toJS(globalThis);
         js_client.ensureStillAlive();
-        rare.s3_default_client = JSC.Strong.create(js_client, globalThis);
+        rare.s3_default_client = .create(js_client, globalThis);
         return js_client;
     };
+}
+
+pub fn tlsDefaultCiphers(this: *RareData) ?[:0]const u8 {
+    return this.tls_default_ciphers orelse null;
+}
+
+pub fn setTLSDefaultCiphers(this: *RareData, ciphers: []const u8) void {
+    if (this.tls_default_ciphers) |old_ciphers| {
+        bun.default_allocator.free(old_ciphers);
+    }
+    this.tls_default_ciphers = bun.handleOom(bun.default_allocator.dupeZ(u8, ciphers));
+}
+
+pub fn defaultCSRFSecret(this: *RareData) []const u8 {
+    if (this.default_csrf_secret.len == 0) {
+        const secret = bun.handleOom(bun.default_allocator.alloc(u8, 16));
+        bun.csprng(secret);
+        this.default_csrf_secret = secret;
+    }
+    return this.default_csrf_secret;
 }
 
 pub fn deinit(this: *RareData) void {
@@ -483,12 +539,65 @@ pub fn deinit(this: *RareData) void {
         bun.default_allocator.destroy(pipe);
     }
 
+    this.#spawn_sync_event_loop.deinit();
     this.aws_signature_cache.deinit();
 
     this.s3_default_client.deinit();
     if (this.boring_ssl_engine) |engine| {
-        _ = bun.BoringSSL.ENGINE_free(engine);
+        _ = bun.BoringSSL.c.ENGINE_free(engine);
+    }
+    if (this.default_csrf_secret.len > 0) {
+        bun.default_allocator.free(this.default_csrf_secret);
     }
 
     this.cleanup_hooks.clearAndFree(bun.default_allocator);
+
+    if (this.websocket_deflate) |deflate| {
+        this.websocket_deflate = null;
+        deflate.deinit();
+    }
+
+    if (this.tls_default_ciphers) |ciphers| {
+        this.tls_default_ciphers = null;
+        bun.default_allocator.free(ciphers);
+    }
+
+    this.valkey_context.deinit();
 }
+
+pub fn websocketDeflate(this: *RareData) *WebSocketDeflate.RareData {
+    return this.websocket_deflate orelse brk: {
+        this.websocket_deflate = bun.new(WebSocketDeflate.RareData, .{});
+        break :brk this.websocket_deflate.?;
+    };
+}
+
+pub const SpawnSyncEventLoop = @import("./event_loop/SpawnSyncEventLoop.zig");
+
+pub fn spawnSyncEventLoop(this: *RareData, vm: *jsc.VirtualMachine) *SpawnSyncEventLoop {
+    return this.#spawn_sync_event_loop.get() orelse brk: {
+        this.#spawn_sync_event_loop = .new(undefined);
+        const ptr: *SpawnSyncEventLoop = this.#spawn_sync_event_loop.get().?;
+        ptr.init(vm);
+        break :brk ptr;
+    };
+}
+
+const IPC = @import("./ipc.zig");
+const UUID = @import("./uuid.zig");
+const WebSocketDeflate = @import("../http/websocket_client/WebSocketDeflate.zig");
+const std = @import("std");
+const EditorContext = @import("../open.zig").EditorContext;
+const StatWatcherScheduler = @import("./node/node_fs_stat_watcher.zig").StatWatcherScheduler;
+const ValkeyContext = @import("../valkey/valkey.zig").ValkeyContext;
+
+const bun = @import("bun");
+const Async = bun.Async;
+const Output = bun.Output;
+const Syscall = bun.sys;
+const api = bun.api;
+const default_allocator = bun.default_allocator;
+const jsc = bun.jsc;
+const uws = bun.uws;
+const BoringSSL = bun.BoringSSL.c;
+const Blob = jsc.WebCore.Blob;

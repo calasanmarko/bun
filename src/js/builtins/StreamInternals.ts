@@ -37,7 +37,7 @@ export function markPromiseAsHandled(promise: Promise<unknown>) {
 
 export function shieldingPromiseResolve(result) {
   const promise = Promise.$resolve(result);
-  if (promise.$then === undefined) promise.$then = Promise.prototype.$then;
+  if (promise.$then === undefined) promise.$then = $Promise.prototype.$then;
   return promise;
 }
 
@@ -163,7 +163,7 @@ export function createFulfilledPromise(value) {
 }
 
 export function toDictionary(value, defaultValue, errorMessage) {
-  if (value === undefined || value === null) return defaultValue;
-  if (!$isObject(value)) throw new TypeError(errorMessage);
+  if ($isUndefinedOrNull(value)) return defaultValue;
+  if (!$isObject(value)) throw $ERR_INVALID_ARG_TYPE(errorMessage);
   return value;
 }

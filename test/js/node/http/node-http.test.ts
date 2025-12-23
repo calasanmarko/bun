@@ -5,9 +5,8 @@
  *
  * A handful of older tests do not run in Node in this file. These tests should be updated to run in Node, or deleted.
  */
-import { bunEnv, randomPort, bunExe } from "harness";
+import { bunEnv, bunExe, exampleSite, randomPort } from "harness";
 import { createTest } from "node-harness";
-import { spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import nodefs, { unlinkSync } from "node:fs";
 import http, {
@@ -15,7 +14,6 @@ import http, {
   createServer,
   get,
   globalAgent,
-  IncomingMessage,
   OutgoingMessage,
   request,
   Server,
@@ -24,13 +22,14 @@ import http, {
   validateHeaderValue,
 } from "node:http";
 import https, { createServer as createHttpsServer } from "node:https";
+import type { AddressInfo } from "node:net";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import * as stream from "node:stream";
 import { PassThrough } from "node:stream";
-import * as zlib from "node:zlib";
 import { run as runHTTPProxyTest } from "./node-http-proxy.js";
 const { describe, expect, it, beforeAll, afterAll, createDoneDotAll, mock, test } = createTest(import.meta.path);
+
 function listen(server: Server, protocol: string = "http"): Promise<URL> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject("Timed out"), 5000).unref();
@@ -67,7 +66,7 @@ describe("node:http", () => {
     it("is not marked encrypted (#5867)", async () => {
       try {
         var server = createServer((req, res) => {
-          expect(req.connection.encrypted).toBe(undefined);
+          expect(req.connection.encrypted).toBe(false);
           res.writeHead(200, { "Content-Type": "text/plain" });
           res.end("Hello World");
         });
@@ -81,10 +80,8 @@ describe("node:http", () => {
       }
     });
     it("request & response body streaming (large)", async () => {
+      const input = Buffer.alloc("hello world, hello world".length * 9000, "hello world, hello world");
       try {
-        const bodyBlob = new Blob(["hello world", "hello world".repeat(9000)]);
-        const input = await bodyBlob.text();
-
         var server = createServer((req, res) => {
           res.writeHead(200, { "Content-Type": "text/plain" });
           req.on("data", chunk => {
@@ -98,11 +95,11 @@ describe("node:http", () => {
         const url = await listen(server);
         const res = await fetch(url, {
           method: "POST",
-          body: bodyBlob,
+          body: input,
         });
 
         const out = await res.text();
-        expect(out).toBe(input);
+        expect(out).toBe(input.toString());
       } finally {
         server.close();
       }
@@ -273,10 +270,20 @@ describe("node:http", () => {
           }
           if (reqUrl.pathname.includes("timeout")) {
             if (timer) clearTimeout(timer);
+            req.on("timeout", () => {
+              console.log("req timeout");
+            });
+            res.on("timeout", () => {
+              console.log("res timeout");
+            });
             timer = setTimeout(() => {
+              if (res.closed) {
+                return;
+              }
+
               res.end("Hello World");
               timer = null;
-            }, 3000);
+            }, 3000).unref();
             return;
           }
           if (reqUrl.pathname === "/pathTest") {
@@ -362,7 +369,7 @@ describe("node:http", () => {
       });
     }
 
-    // it.only("check for expected fields", done => {
+    // test("check for expected fields", done => {
     //   runTest((server, port) => {
     //     const req = request({ host: "localhost", port, method: "GET" }, res => {
     //       console.log("called");
@@ -429,6 +436,7 @@ describe("node:http", () => {
         const req = request(`http://localhost:${port}`, res => {
           let data = "";
           res.setEncoding("utf8");
+
           res.on("data", chunk => {
             data += chunk;
           });
@@ -442,8 +450,14 @@ describe("node:http", () => {
       });
     });
 
-    it("should make a https:// GET request when passed string as first arg", done => {
-      const req = https.request("https://example.com", { headers: { "accept-encoding": "identity" } }, res => {
+    it("should make a https:// GET request when passed string as first arg", _done => {
+      const server = exampleSite();
+      function done(err?: Error) {
+        server.stop();
+        _done(err);
+      }
+
+      const req = https.request(server.url, { ca: server.ca, headers: { "accept-encoding": "identity" } }, res => {
         let data = "";
         res.setEncoding("utf8");
         res.on("data", chunk => {
@@ -817,7 +831,12 @@ describe("node:http", () => {
 
     it("should correctly stream a multi-chunk response #5320", async done => {
       runTest(done, (server, serverPort, done) => {
-        const req = request({ host: "localhost", port: `${serverPort}`, path: "/multi-chunk-response", method: "GET" });
+        const req = request({
+          host: "localhost",
+          port: `${serverPort}`,
+          path: "/multi-chunk-response",
+          method: "GET",
+        });
 
         req.on("error", err => done(err));
 
@@ -847,56 +866,26 @@ describe("node:http", () => {
   });
 
   describe("https.request with custom tls options", () => {
-    const createServer = () =>
-      new Promise(resolve => {
-        const server = createHttpsServer(
-          {
-            key: nodefs.readFileSync(path.join(import.meta.dir, "fixtures", "openssl_localhost.key")),
-            cert: nodefs.readFileSync(path.join(import.meta.dir, "fixtures", "openssl_localhost.crt")),
-            rejectUnauthorized: true,
-          },
-          (req, res) => {
-            res.writeHead(200);
-            res.end("hello world");
-          },
-        );
+    it("supports custom tls args", async () => {
+      await using httpsServer = exampleSite();
 
-        listen(server, "https").then(url => {
-          resolve({
-            server,
-            close: () => server.close(),
-            url,
-          });
-        });
+      const { promise, resolve, reject } = Promise.withResolvers();
+      const options: https.RequestOptions = {
+        method: "GET",
+        url: httpsServer.url.href as string,
+        port: httpsServer.url.port,
+        ca: httpsServer.ca,
+      };
+      const req = https.request(options, res => {
+        res.on("data", () => null);
+        res.on("end", resolve);
       });
 
-    it("supports custom tls args", async done => {
-      const { url, close } = await createServer();
-      try {
-        const options: https.RequestOptions = {
-          method: "GET",
-          url,
-          port: url.port,
-          ca: nodefs.readFileSync(path.join(import.meta.dir, "fixtures", "openssl_localhost_ca.pem")),
-        };
-        const req = https.request(options, res => {
-          res.on("data", () => null);
-          res.on("end", () => {
-            close();
-            done();
-          });
-        });
+      req.on("error", reject);
 
-        req.on("error", error => {
-          close();
-          done(error);
-        });
+      req.end();
 
-        req.end();
-      } catch (e) {
-        close();
-        throw e;
-      }
+      await promise;
     });
   });
 
@@ -1061,9 +1050,10 @@ describe("node:http", () => {
     });
   });
 
-  test("test unix socket server", done => {
+  test("test unix socket server", async () => {
+    const { promise, resolve, reject } = Promise.withResolvers();
     const socketPath = `${tmpdir()}/bun-server-${Math.random().toString(32)}.sock`;
-    const server = createServer((req, res) => {
+    await using server = createServer((req, res) => {
       expect(req.method).toStrictEqual("GET");
       expect(req.url).toStrictEqual("/bun?a=1");
       res.writeHead(200, {
@@ -1074,32 +1064,34 @@ describe("node:http", () => {
       res.end();
     });
 
-    test("should not decompress gzip, issue#4397", async () => {
-      const { promise, resolve } = Promise.withResolvers();
-      https
-        .request("https://bun.sh/", { headers: { "accept-encoding": "gzip" } }, res => {
-          res.on("data", function cb(chunk) {
-            resolve(chunk);
-            res.off("data", cb);
-          });
-        })
-        .end();
-      const chunk = await promise;
-      expect(chunk.toString()).not.toContain("<html");
-    });
-
-    server.listen(socketPath, () => {
-      // TODO: unix socket is not implemented in fetch.
-      const output = spawnSync("curl", ["--unix-socket", socketPath, "http://localhost/bun?a=1"]);
+    server.listen(socketPath, async () => {
       try {
-        expect(output.stdout.toString()).toStrictEqual("Bun\n");
-        done();
+        const response = await fetch(`http://localhost/bun?a=1`, {
+          unix: socketPath,
+        });
+        const text = await response.text();
+        expect(text).toBe("Bun\n");
+        resolve();
       } catch (err) {
-        done(err);
-      } finally {
-        server.close();
+        reject(err);
       }
     });
+
+    await promise;
+  });
+
+  test("should not decompress gzip, issue#4397", async () => {
+    const { promise, resolve } = Promise.withResolvers();
+    https
+      .request("https://bun.sh/", { headers: { "accept-encoding": "gzip" } }, res => {
+        res.on("data", function cb(chunk) {
+          resolve(chunk);
+          res.off("data", cb);
+        });
+      })
+      .end();
+    const chunk = await promise;
+    expect(chunk.toString()).not.toContain("<html");
   });
 
   test("should listen on port if string, issue#4582", done => {
@@ -1138,6 +1130,7 @@ describe("node:http", () => {
     expect(err.code).toBe("EADDRINUSE");
   });
 });
+
 describe("node https server", async () => {
   const httpsOptions = {
     key: nodefs.readFileSync(path.join(import.meta.dir, "fixtures", "cert.key")),
@@ -1264,22 +1257,7 @@ describe("server.address should be valid IP", () => {
       done(err);
     }
   });
-  test("ServerResponse reply", done => {
-    const createDone = createDoneDotAll(done);
-    const doneRequest = createDone();
-    try {
-      const req = {};
-      const sendedText = "Bun\n";
-      const res = new ServerResponse(req, async (res: Response) => {
-        expect(await res.text()).toBe(sendedText);
-        doneRequest();
-      });
-      res.write(sendedText);
-      res.end();
-    } catch (err) {
-      doneRequest(err);
-    }
-  });
+
   test("ServerResponse instanceof OutgoingMessage", () => {
     expect(new ServerResponse({}) instanceof OutgoingMessage).toBe(true);
   });
@@ -1303,7 +1281,7 @@ describe("server.address should be valid IP", () => {
 
       expect(res.socket).toBe(socket);
       expect(socket._httpMessage).toBe(res);
-      expect(() => res.assignSocket(socket)).toThrow("ServerResponse has an already assigned socket");
+      expect(() => res.assignSocket(socket)).toThrow("Socket already assigned");
       socket.emit("close");
       doneSocket();
     } catch (err) {
@@ -1312,849 +1290,27 @@ describe("server.address should be valid IP", () => {
   });
 });
 
-it("should not accept untrusted certificates", async () => {
-  const server = https.createServer(
-    {
-      key: nodefs.readFileSync(path.join(import.meta.dir, "fixtures", "openssl.key")),
-      cert: nodefs.readFileSync(path.join(import.meta.dir, "fixtures", "openssl.crt")),
-      passphrase: "123123123",
-    },
-    (req, res) => {
-      res.write("Hello from https server");
-      res.end();
-    },
-  );
-  server.listen(0, "127.0.0.1");
-  const address = server.address();
-
-  try {
-    let url_address = address.address;
-    if (address.family === "IPv6") {
-      url_address = `[${url_address}]`;
-    }
-    const res = await fetch(`https://${url_address}:${address.port}`, {
-      tls: {
-        rejectUnauthorized: true,
-      },
-    });
-    await res.text();
-    expect(true).toBe("unreacheable");
-  } catch (err) {
-    expect(err.code).toBe("UNABLE_TO_VERIFY_LEAF_SIGNATURE");
-    expect(err.message).toBe("unable to verify the first certificate");
-  }
-
-  server.close();
-});
-
-it("IncomingMessage with a RequestLike object", () => {
-  const rawHeadersMap = {
-    "x-test": "test",
-    "Real-Header": "test",
-    "content-type": "text/plain",
-    "User-Agent": "Bun",
-  };
-
-  // To excercise the case where inline capacity cannot be used
-  for (let i = 0; i < 64; i++) {
-    rawHeadersMap[`header-${i}`] = `value-${i}`;
-  }
-
-  const headers = new Headers(rawHeadersMap);
-  headers.append("set-cookie", "foo=bar");
-  headers.append("set-cookie", "bar=baz");
-
-  const request = new Request("https://example.com/hello/hi", {
-    headers,
-  });
-
-  const incomingMessageFromRequest = new IncomingMessage(request);
-  const incomingMessageFromRequestLike1 = new IncomingMessage({
-    url: "/hello/hi",
-    headers: headers,
-    method: request.method,
-  });
-  const incomingMessageFromRequestLike2 = new IncomingMessage({
-    url: "/hello/hi",
-    headers: headers.toJSON(),
-    method: request.method,
-  });
-  for (let incomingMessageFromRequestLike of [
-    incomingMessageFromRequestLike1,
-    incomingMessageFromRequestLike2,
-    incomingMessageFromRequest,
-  ]) {
-    expect(incomingMessageFromRequestLike.headers).toEqual(incomingMessageFromRequest.headers);
-    expect(incomingMessageFromRequestLike.method).toEqual(incomingMessageFromRequest.method);
-    expect(incomingMessageFromRequestLike.url).toEqual(incomingMessageFromRequest.url);
-    expect(incomingMessageFromRequestLike.headers).toEqual({
-      "x-test": "test",
-      "real-header": "test",
-      "content-type": "text/plain",
-      "user-agent": "Bun",
-      "set-cookie": ["foo=bar", "bar=baz"],
-      "header-0": "value-0",
-      "header-1": "value-1",
-      "header-10": "value-10",
-      "header-11": "value-11",
-      "header-12": "value-12",
-      "header-13": "value-13",
-      "header-14": "value-14",
-      "header-15": "value-15",
-      "header-16": "value-16",
-      "header-17": "value-17",
-      "header-18": "value-18",
-      "header-19": "value-19",
-      "header-2": "value-2",
-      "header-20": "value-20",
-      "header-21": "value-21",
-      "header-22": "value-22",
-      "header-23": "value-23",
-      "header-24": "value-24",
-      "header-25": "value-25",
-      "header-26": "value-26",
-      "header-27": "value-27",
-      "header-28": "value-28",
-      "header-29": "value-29",
-      "header-3": "value-3",
-      "header-30": "value-30",
-      "header-31": "value-31",
-      "header-32": "value-32",
-      "header-33": "value-33",
-      "header-34": "value-34",
-      "header-35": "value-35",
-      "header-36": "value-36",
-      "header-37": "value-37",
-      "header-38": "value-38",
-      "header-39": "value-39",
-      "header-4": "value-4",
-      "header-40": "value-40",
-      "header-41": "value-41",
-      "header-42": "value-42",
-      "header-43": "value-43",
-      "header-44": "value-44",
-      "header-45": "value-45",
-      "header-46": "value-46",
-      "header-47": "value-47",
-      "header-48": "value-48",
-      "header-49": "value-49",
-      "header-5": "value-5",
-      "header-50": "value-50",
-      "header-51": "value-51",
-      "header-52": "value-52",
-      "header-53": "value-53",
-      "header-54": "value-54",
-      "header-55": "value-55",
-      "header-56": "value-56",
-      "header-57": "value-57",
-      "header-58": "value-58",
-      "header-59": "value-59",
-      "header-6": "value-6",
-      "header-60": "value-60",
-      "header-61": "value-61",
-      "header-62": "value-62",
-      "header-63": "value-63",
-      "header-7": "value-7",
-      "header-8": "value-8",
-      "header-9": "value-9",
-    });
-  }
-
-  // this one preserves the original case
-  expect(incomingMessageFromRequestLike1.rawHeaders).toEqual([
-    "content-type",
-    "text/plain",
-    "user-agent",
-    "Bun",
-    "set-cookie",
-    "foo=bar",
-    "set-cookie",
-    "bar=baz",
-    "x-test",
-    "test",
-    "Real-Header",
-    "test",
-    "header-0",
-    "value-0",
-    "header-1",
-    "value-1",
-    "header-2",
-    "value-2",
-    "header-3",
-    "value-3",
-    "header-4",
-    "value-4",
-    "header-5",
-    "value-5",
-    "header-6",
-    "value-6",
-    "header-7",
-    "value-7",
-    "header-8",
-    "value-8",
-    "header-9",
-    "value-9",
-    "header-10",
-    "value-10",
-    "header-11",
-    "value-11",
-    "header-12",
-    "value-12",
-    "header-13",
-    "value-13",
-    "header-14",
-    "value-14",
-    "header-15",
-    "value-15",
-    "header-16",
-    "value-16",
-    "header-17",
-    "value-17",
-    "header-18",
-    "value-18",
-    "header-19",
-    "value-19",
-    "header-20",
-    "value-20",
-    "header-21",
-    "value-21",
-    "header-22",
-    "value-22",
-    "header-23",
-    "value-23",
-    "header-24",
-    "value-24",
-    "header-25",
-    "value-25",
-    "header-26",
-    "value-26",
-    "header-27",
-    "value-27",
-    "header-28",
-    "value-28",
-    "header-29",
-    "value-29",
-    "header-30",
-    "value-30",
-    "header-31",
-    "value-31",
-    "header-32",
-    "value-32",
-    "header-33",
-    "value-33",
-    "header-34",
-    "value-34",
-    "header-35",
-    "value-35",
-    "header-36",
-    "value-36",
-    "header-37",
-    "value-37",
-    "header-38",
-    "value-38",
-    "header-39",
-    "value-39",
-    "header-40",
-    "value-40",
-    "header-41",
-    "value-41",
-    "header-42",
-    "value-42",
-    "header-43",
-    "value-43",
-    "header-44",
-    "value-44",
-    "header-45",
-    "value-45",
-    "header-46",
-    "value-46",
-    "header-47",
-    "value-47",
-    "header-48",
-    "value-48",
-    "header-49",
-    "value-49",
-    "header-50",
-    "value-50",
-    "header-51",
-    "value-51",
-    "header-52",
-    "value-52",
-    "header-53",
-    "value-53",
-    "header-54",
-    "value-54",
-    "header-55",
-    "value-55",
-    "header-56",
-    "value-56",
-    "header-57",
-    "value-57",
-    "header-58",
-    "value-58",
-    "header-59",
-    "value-59",
-    "header-60",
-    "value-60",
-    "header-61",
-    "value-61",
-    "header-62",
-    "value-62",
-    "header-63",
-    "value-63",
-  ]);
-
-  // this one does not preserve the original case
-  expect(incomingMessageFromRequestLike2.rawHeaders).toEqual([
-    "content-type",
-    "text/plain",
-    "user-agent",
-    "Bun",
-    "set-cookie",
-    "foo=bar",
-    "set-cookie",
-    "bar=baz",
-    "x-test",
-    "test",
-    "real-header",
-    "test",
-    "header-0",
-    "value-0",
-    "header-1",
-    "value-1",
-    "header-2",
-    "value-2",
-    "header-3",
-    "value-3",
-    "header-4",
-    "value-4",
-    "header-5",
-    "value-5",
-    "header-6",
-    "value-6",
-    "header-7",
-    "value-7",
-    "header-8",
-    "value-8",
-    "header-9",
-    "value-9",
-    "header-10",
-    "value-10",
-    "header-11",
-    "value-11",
-    "header-12",
-    "value-12",
-    "header-13",
-    "value-13",
-    "header-14",
-    "value-14",
-    "header-15",
-    "value-15",
-    "header-16",
-    "value-16",
-    "header-17",
-    "value-17",
-    "header-18",
-    "value-18",
-    "header-19",
-    "value-19",
-    "header-20",
-    "value-20",
-    "header-21",
-    "value-21",
-    "header-22",
-    "value-22",
-    "header-23",
-    "value-23",
-    "header-24",
-    "value-24",
-    "header-25",
-    "value-25",
-    "header-26",
-    "value-26",
-    "header-27",
-    "value-27",
-    "header-28",
-    "value-28",
-    "header-29",
-    "value-29",
-    "header-30",
-    "value-30",
-    "header-31",
-    "value-31",
-    "header-32",
-    "value-32",
-    "header-33",
-    "value-33",
-    "header-34",
-    "value-34",
-    "header-35",
-    "value-35",
-    "header-36",
-    "value-36",
-    "header-37",
-    "value-37",
-    "header-38",
-    "value-38",
-    "header-39",
-    "value-39",
-    "header-40",
-    "value-40",
-    "header-41",
-    "value-41",
-    "header-42",
-    "value-42",
-    "header-43",
-    "value-43",
-    "header-44",
-    "value-44",
-    "header-45",
-    "value-45",
-    "header-46",
-    "value-46",
-    "header-47",
-    "value-47",
-    "header-48",
-    "value-48",
-    "header-49",
-    "value-49",
-    "header-50",
-    "value-50",
-    "header-51",
-    "value-51",
-    "header-52",
-    "value-52",
-    "header-53",
-    "value-53",
-    "header-54",
-    "value-54",
-    "header-55",
-    "value-55",
-    "header-56",
-    "value-56",
-    "header-57",
-    "value-57",
-    "header-58",
-    "value-58",
-    "header-59",
-    "value-59",
-    "header-60",
-    "value-60",
-    "header-61",
-    "value-61",
-    "header-62",
-    "value-62",
-    "header-63",
-    "value-63",
-  ]);
-});
-
-it("#6892", () => {
-  const totallyValid = ["*", "/", "/foo", "/foo/bar"];
-  for (const url of totallyValid) {
-    const req = new IncomingMessage({ url });
-    expect(req.url).toBe(url);
-    expect(req.method).toBeNull();
-  }
-});
-
-it("#4415.1 ServerResponse es6", () => {
-  class Response extends ServerResponse {
-    constructor(req) {
-      super(req);
-    }
-  }
-  const req = {};
-  const res = new Response(req);
-  expect(res.req).toBe(req);
-});
-
-it("#4415.2 ServerResponse es5", () => {
-  function Response(req) {
-    ServerResponse.call(this, req);
-  }
-  Response.prototype = Object.create(ServerResponse.prototype);
-  const req = {};
-  const res = new Response(req);
-  expect(res.req).toBe(req);
-});
-
-it("#4415.3 Server es5", done => {
-  const server = Server((req, res) => {
-    res.end();
-  });
-  server.listen(0, async (_err, host, port) => {
-    try {
-      const res = await fetch(`http://localhost:${port}`);
-      expect(res.status).toBe(200);
-      done();
-    } catch (err) {
-      done(err);
-    } finally {
-      server.close();
-    }
-  });
-});
-
-it("#4415.4 IncomingMessage es5", () => {
-  const im = Object.create(IncomingMessage.prototype);
-  IncomingMessage.call(im, { url: "/foo" });
-  expect(im.url).toBe("/foo");
-});
-
-it("#9242.1 Server has constructor", () => {
-  const s = new Server();
-  expect(s.constructor).toBe(Server);
-});
-it("#9242.2 IncomingMessage has constructor", () => {
-  const im = new IncomingMessage("http://localhost");
-  expect(im.constructor).toBe(IncomingMessage);
-});
-it("#9242.3 OutgoingMessage has constructor", () => {
-  const om = new OutgoingMessage();
-  expect(om.constructor).toBe(OutgoingMessage);
-});
-it("#9242.4 ServerResponse has constructor", () => {
-  const sr = new ServerResponse({});
-  expect(sr.constructor).toBe(ServerResponse);
-});
-
-// Windows doesnt support SIGUSR1
-if (process.platform !== "win32") {
-  // By not timing out, this test passes.
-  test(".unref() works", async () => {
-    expect([path.join(import.meta.dir, "node-http-ref-fixture.js")]).toRun();
-  });
-}
-
-it("#10177 response.write with non-ascii latin1 should not cause duplicated character or segfault", () => {
-  // this can cause a segfault so we run it in a separate process
-  const { exitCode } = Bun.spawnSync({
-    cmd: [bunExe(), "run", path.join(import.meta.dir, "node-http-response-write-encode-fixture.js")],
-    env: bunEnv,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  expect(exitCode).toBe(0);
-}, 60_000);
-
-it("#11425 http no payload limit", done => {
-  const server = Server((req, res) => {
-    res.end();
-  });
-  server.listen(0, async (_err, host, port) => {
-    try {
-      const res = await fetch(`http://localhost:${port}`, {
-        method: "POST",
-        body: new Uint8Array(1024 * 1024 * 200),
-      });
-      expect(res.status).toBe(200);
-      done();
-    } catch (err) {
-      done(err);
-    } finally {
-      server.close();
-    }
-  });
-});
-
-it("should emit events in the right order", async () => {
-  const { stdout, exited } = Bun.spawn({
-    cmd: [bunExe(), "run", path.join(import.meta.dir, "fixtures/log-events.mjs")],
-    stdout: "pipe",
-    stdin: "ignore",
-    stderr: "inherit",
-    env: bunEnv,
-  });
-  const out = await new Response(stdout).text();
-  expect(out.split("\n")).toEqual([
-    `[ "req", "prefinish" ]`,
-    `[ "req", "socket" ]`,
-    `[ "req", "finish" ]`,
-    `[ "req", "response" ]`,
-    "STATUS: 200",
-    // `[ "res", "resume" ]`,
-    // `[ "res", "readable" ]`,
-    // `[ "res", "end" ]`,
-    `[ "req", "close" ]`,
-    `[ "res", Symbol(kConstruct) ]`,
-    // `[ "res", "close" ]`,
-    "",
-  ]);
-  expect(await exited).toBe(0);
-});
-
-it("destroy should end download", async () => {
-  // just simulate some file that will take forever to download
-  const payload = Buffer.alloc(128 * 1024, "X");
-  for (let i = 0; i < 5; i++) {
-    let sendedByteLength = 0;
-    using server = Bun.serve({
-      port: 0,
-      async fetch(req) {
-        let running = true;
-        req.signal.onabort = () => (running = false);
-        return new Response(async function* () {
-          while (running) {
-            sendedByteLength += payload.byteLength;
-            yield payload;
-            await Bun.sleep(10);
-          }
-        });
-      },
-    });
-
-    async function run() {
-      let receivedByteLength = 0;
-      let { promise, resolve } = Promise.withResolvers();
-      const req = request(server.url, res => {
-        res.on("data", data => {
-          receivedByteLength += data.length;
-          if (resolve) {
-            resolve();
-            resolve = null;
-          }
-        });
-      });
-      req.end();
-      await promise;
-      req.destroy();
-      await Bun.sleep(10);
-      const initialByteLength = receivedByteLength;
-      // we should receive the same amount of data we sent
-      expect(initialByteLength).toBeLessThanOrEqual(sendedByteLength);
-      await Bun.sleep(10);
-      // we should not receive more data after destroy
-      expect(initialByteLength).toBe(receivedByteLength);
-      await Bun.sleep(10);
-    }
-
-    const runCount = 50;
-    const runs = Array.from({ length: runCount }, run);
-    await Promise.all(runs);
-    Bun.gc(true);
-    await Bun.sleep(10);
-  }
-});
-
-it("can send brotli from Server and receive with fetch", async () => {
-  try {
-    var server = createServer((req, res) => {
-      expect(req.url).toBe("/hello");
-      res.writeHead(200);
-      res.setHeader("content-encoding", "br");
-
-      const inputStream = new stream.Readable();
-      inputStream.push("Hello World");
-      inputStream.push(null);
-
-      inputStream.pipe(zlib.createBrotliCompress()).pipe(res);
-    });
-    const url = await listen(server);
-    const res = await fetch(new URL("/hello", url));
-    expect(await res.text()).toBe("Hello World");
-  } catch (e) {
-    throw e;
-  } finally {
-    server.close();
-  }
-});
-
-it("can send gzip from Server and receive with fetch", async () => {
-  try {
-    var server = createServer((req, res) => {
-      expect(req.url).toBe("/hello");
-      res.writeHead(200);
-      res.setHeader("content-encoding", "gzip");
-
-      const inputStream = new stream.Readable();
-      inputStream.push("Hello World");
-      inputStream.push(null);
-
-      inputStream.pipe(zlib.createGzip()).pipe(res);
-    });
-    const url = await listen(server);
-    const res = await fetch(new URL("/hello", url));
-    expect(await res.text()).toBe("Hello World");
-  } catch (e) {
-    throw e;
-  } finally {
-    server.close();
-  }
-});
-
-it("can send deflate from Server and receive with fetch", async () => {
-  try {
-    var server = createServer((req, res) => {
-      expect(req.url).toBe("/hello");
-      res.writeHead(200);
-      res.setHeader("content-encoding", "deflate");
-
-      const inputStream = new stream.Readable();
-      inputStream.push("Hello World");
-      inputStream.push(null);
-
-      inputStream.pipe(zlib.createDeflate()).pipe(res);
-    });
-    const url = await listen(server);
-    const res = await fetch(new URL("/hello", url));
-    expect(await res.text()).toBe("Hello World");
-  } catch (e) {
-    throw e;
-  } finally {
-    server.close();
-  }
-});
-
-it("can send brotli from Server and receive with Client", async () => {
-  try {
-    var server = createServer((req, res) => {
-      expect(req.url).toBe("/hello");
-      res.writeHead(200);
-      res.setHeader("content-encoding", "br");
-
-      const inputStream = new stream.Readable();
-      inputStream.push("Hello World");
-      inputStream.push(null);
-
-      const passthrough = new stream.PassThrough();
-      passthrough.on("data", data => res.write(data));
-      passthrough.on("end", () => res.end());
-
-      inputStream.pipe(zlib.createBrotliCompress()).pipe(passthrough);
-    });
-
-    const url = await listen(server);
-    const { resolve, reject, promise } = Promise.withResolvers();
-    http.get(new URL("/hello", url), res => {
-      let rawData = "";
-      const passthrough = stream.PassThrough();
-      passthrough.on("data", chunk => {
-        rawData += chunk;
-      });
-      passthrough.on("end", () => {
-        try {
-          expect(Buffer.from(rawData)).toEqual(Buffer.from("Hello World"));
-          resolve();
-        } catch (e) {
-          reject(e);
-        }
-      });
-      res.pipe(zlib.createBrotliDecompress()).pipe(passthrough);
-    });
-    await promise;
-  } catch (e) {
-    throw e;
-  } finally {
-    server.close();
-  }
-});
-
-it("ServerResponse ClientRequest field exposes agent getter", async () => {
-  try {
-    var server = createServer((req, res) => {
-      expect(req.url).toBe("/hello");
-      res.writeHead(200);
-      res.end("world");
-    });
-    const url = await listen(server);
-    const { resolve, reject, promise } = Promise.withResolvers();
-    http.get(new URL("/hello", url), res => {
-      try {
-        expect(res.req.agent.protocol).toBe("http:");
-        resolve();
-      } catch (e) {
-        reject(e);
-      }
-    });
-    await promise;
-  } catch (e) {
-    throw e;
-  } finally {
-    server.close();
-  }
-});
-
-it("should accept custom certs when provided", async () => {
-  const server = https.createServer(
-    {
-      key: nodefs.readFileSync(path.join(import.meta.dir, "fixtures", "openssl_localhost.key")),
-      cert: nodefs.readFileSync(path.join(import.meta.dir, "fixtures", "openssl_localhost.crt")),
-      passphrase: "123123123",
-    },
-    (req, res) => {
-      res.write("Hello from https server");
-      res.end();
-    },
-  );
-  server.listen(0, "localhost");
-  const address = server.address();
-
-  let url_address = address.address;
-  const res = await fetch(`https://localhost:${address.port}`, {
-    tls: {
-      rejectUnauthorized: true,
-      ca: nodefs.readFileSync(path.join(import.meta.dir, "fixtures", "openssl_localhost_ca.pem")),
-    },
-  });
-  const t = await res.text();
-  expect(t).toEqual("Hello from https server");
-
-  server.close();
-});
-it("should error with faulty args", async () => {
-  const server = https.createServer(
-    {
-      key: nodefs.readFileSync(path.join(import.meta.dir, "fixtures", "openssl_localhost.key")),
-      cert: nodefs.readFileSync(path.join(import.meta.dir, "fixtures", "openssl_localhost.crt")),
-      passphrase: "123123123",
-    },
-    (req, res) => {
-      res.write("Hello from https server");
-      res.end();
-    },
-  );
-  server.listen(0, "localhost");
-  const address = server.address();
-
-  try {
-    let url_address = address.address;
-    const res = await fetch(`https://localhost:${address.port}`, {
-      tls: {
-        rejectUnauthorized: true,
-        ca: "some invalid value for a ca",
-      },
-    });
-    await res.text();
-    expect(true).toBe("unreacheable");
-  } catch (err) {
-    expect(err.code).toBe("FailedToOpenSocket");
-    expect(err.message).toBe("Was there a typo in the url or port?");
-  }
-  server.close();
-});
-
 it("should propagate exception in sync data handler", async () => {
-  const { exitCode, stdout } = Bun.spawnSync({
+  await using proc = Bun.spawn({
     cmd: [bunExe(), "run", path.join(import.meta.dir, "node-http-error-in-data-handler-fixture.1.js")],
     stdout: "pipe",
     stderr: "inherit",
     env: bunEnv,
   });
-
-  expect(stdout.toString()).toContain("Test passed");
+  const [stdout, exitCode] = await Promise.all([proc.stdout.text(), proc.exited]);
+  expect(stdout).toContain("Test passed");
   expect(exitCode).toBe(0);
 });
 
 it("should propagate exception in async data handler", async () => {
-  const { exitCode, stdout } = Bun.spawnSync({
+  await using proc = Bun.spawn({
     cmd: [bunExe(), "run", path.join(import.meta.dir, "node-http-error-in-data-handler-fixture.2.js")],
     stdout: "pipe",
     stderr: "inherit",
     env: bunEnv,
   });
-
-  expect(stdout.toString()).toContain("Test passed");
+  const [stdout, exitCode] = await Promise.all([proc.stdout.text(), proc.exited]);
+  expect(stdout).toContain("Test passed");
   expect(exitCode).toBe(0);
 });
 
@@ -2204,354 +1360,351 @@ it.skip("should be able to stream huge amounts of data", async () => {
   }
 }, 30_000);
 
-// TODO: today we use a workaround to continue event, we need to fix it in the future.
-it("should emit continue event #7480", done => {
-  let receivedContinue = false;
-  const req = https.request(
-    "https://example.com",
-    { headers: { "accept-encoding": "identity", "expect": "100-continue" } },
-    res => {
-      let data = "";
-      res.setEncoding("utf8");
-      res.on("data", chunk => {
-        data += chunk;
+describe("HTTP Server Security Tests - Advanced", () => {
+  // Setup and teardown utilities
+  let server;
+  let port;
+
+  beforeEach(async () => {
+    server = new Server();
+
+    server.listen(0, () => {
+      port = server.address().port;
+    });
+    await once(server, "listening");
+  });
+
+  afterEach(async () => {
+    // Close the server if it's still running
+    if (server.listening) {
+      server.closeAllConnections();
+    }
+  });
+
+  // Helper that returns a promise with the server response
+  const sendRequest = message => {
+    return new Promise((resolve, reject) => {
+      const client = connect(port, "localhost");
+      let response = "";
+      client.setEncoding("utf8");
+      client.on("data", chunk => {
+        response += chunk;
       });
-      res.on("end", () => {
-        expect(receivedContinue).toBe(true);
-        expect(data).toContain("This domain is for use in illustrative examples in documents");
-        done();
+
+      client.on("error", reject);
+
+      client.on("end", () => {
+        resolve(response.toString("utf8"));
       });
-      res.on("error", err => done(err));
-    },
-  );
-  req.on("continue", () => {
-    receivedContinue = true;
-  });
-  req.end();
-});
 
-it("should not emit continue event #7480", done => {
-  let receivedContinue = false;
-  const req = https.request("https://example.com", { headers: { "accept-encoding": "identity" } }, res => {
-    let data = "";
-    res.setEncoding("utf8");
-    res.on("data", chunk => {
-      data += chunk;
+      client.write(message);
     });
-    res.on("end", () => {
-      expect(receivedContinue).toBe(false);
-      expect(data).toContain("This domain is for use in illustrative examples in documents");
-      done();
+  };
+
+  // Mock request handler that simulates security-sensitive operations
+  const createMockHandler = () => {
+    const mockHandler = jest.fn().mockImplementation((req, res) => {
+      // In a real app, this might be a security-sensitive operation
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("Request processed successfully");
     });
-    res.on("error", err => done(err));
-  });
-  req.on("continue", () => {
-    receivedContinue = true;
-  });
-  req.end();
-});
 
-it("http.Agent is configured correctly", () => {
-  const agent = new http.Agent();
-  expect(agent.defaultPort).toBe(80);
-  expect(agent.protocol).toBe("http:");
-});
+    return mockHandler;
+  };
 
-it("https.Agent is configured correctly", () => {
-  const agent = new https.Agent();
-  expect(agent.defaultPort).toBe(443);
-  expect(agent.protocol).toBe("https:");
-});
+  // Test Suites
 
-it("http.get can use http.Agent", async () => {
-  const agent = new http.Agent();
-  const { promise, resolve } = Promise.withResolvers();
-  http.get({ agent, hostname: "google.com" }, resolve);
-  const response = await promise;
-  expect(response.req.port).toBe(80);
-  expect(response.req.protocol).toBe("http:");
-});
-
-it("https.get can use https.Agent", async () => {
-  const agent = new https.Agent();
-  const { promise, resolve } = Promise.withResolvers();
-  https.get({ agent, hostname: "google.com" }, resolve);
-  const response = await promise;
-  expect(response.req.port).toBe(443);
-  expect(response.req.protocol).toBe("https:");
-});
-
-it("http.request has the correct options", async () => {
-  const { promise, resolve } = Promise.withResolvers();
-  http.request("http://google.com/", resolve).end();
-  const response = await promise;
-  expect(response.req.port).toBe(80);
-  expect(response.req.protocol).toBe("http:");
-});
-
-it("https.request has the correct options", async () => {
-  const { promise, resolve } = Promise.withResolvers();
-  https.request("https://google.com/", resolve).end();
-  const response = await promise;
-  expect(response.req.port).toBe(443);
-  expect(response.req.protocol).toBe("https:");
-});
-
-it("using node:http to do https: request fails", () => {
-  expect(() => http.request("https://example.com")).toThrow(TypeError);
-  expect(() => http.request("https://example.com")).toThrow({
-    code: "ERR_INVALID_PROTOCOL",
-    message: `Protocol "https:" not supported. Expected "http:"`,
-  });
-});
-
-it("should emit close, and complete should be true only after close #13373", async () => {
-  const server = http.createServer().listen(0);
-  try {
-    await once(server, "listening");
-    fetch(`http://localhost:${server.address().port}`)
-      .then(res => res.text())
-      .catch(() => {});
-
-    const [req, res] = await once(server, "request");
-    expect(req.complete).toBe(false);
-    const closeEvent = once(req, "close");
-    res.end("hi");
-
-    await closeEvent;
-    expect(req.complete).toBe(true);
-  } finally {
-    server.closeAllConnections();
-  }
-});
-
-it("should emit close when connection is aborted", async () => {
-  const server = http.createServer().listen(0);
-  try {
-    await once(server, "listening");
-    const controller = new AbortController();
-    fetch(`http://localhost:${server.address().port}`, { signal: controller.signal })
-      .then(res => res.text())
-      .catch(() => {});
-
-    const [req, res] = await once(server, "request");
-    expect(req.complete).toBe(false);
-    const closeEvent = once(req, "close");
-    controller.abort();
-    await closeEvent;
-    expect(req.complete).toBe(true);
-  } finally {
-    server.close();
-  }
-});
-
-it("should emit timeout event", async () => {
-  const server = http.createServer().listen(0);
-  try {
-    await once(server, "listening");
-    fetch(`http://localhost:${server.address().port}`)
-      .then(res => res.text())
-      .catch(() => {});
-
-    const [req, res] = await once(server, "request");
-    expect(req.complete).toBe(false);
-    let callBackCalled = false;
-    req.setTimeout(1000, () => {
-      callBackCalled = true;
-    });
-    await once(req, "timeout");
-    expect(callBackCalled).toBe(true);
-  } finally {
-    server.closeAllConnections();
-  }
-}, 12_000);
-
-it("should emit timeout event when using server.setTimeout", async () => {
-  const server = http.createServer().listen(0);
-  try {
-    await once(server, "listening");
-    let callBackCalled = false;
-    server.setTimeout(1000, () => {
-      callBackCalled = true;
-    });
-    fetch(`http://localhost:${server.address().port}`)
-      .then(res => res.text())
-      .catch(() => {});
-
-    const [req, res] = await once(server, "request");
-    expect(req.complete).toBe(false);
-
-    await once(server, "timeout");
-    expect(callBackCalled).toBe(true);
-  } finally {
-    server.closeAllConnections();
-  }
-}, 12_000);
-
-it("must set headersSent to true after headers are sent #3458", async () => {
-  const server = createServer().listen(0);
-  try {
-    await once(server, "listening");
-    fetch(`http://localhost:${server.address().port}`).then(res => res.text());
-    const [req, res] = await once(server, "request");
-    expect(res.headersSent).toBe(false);
-    const { promise, resolve } = Promise.withResolvers();
-    res.end("OK", resolve);
-    await promise;
-    expect(res.headersSent).toBe(true);
-  } finally {
-    server.close();
-  }
-});
-
-it("must set headersSent to true after headers are sent when using chunk encoded", async () => {
-  const server = createServer().listen(0);
-  try {
-    await once(server, "listening");
-    fetch(`http://localhost:${server.address().port}`).then(res => res.text());
-    const [req, res] = await once(server, "request");
-    expect(res.headersSent).toBe(false);
-    const { promise, resolve } = Promise.withResolvers();
-    res.write("first", () => {
-      res.write("second", () => {
-        res.end("OK", resolve);
+  describe("Header Injection Protection", () => {
+    test("rejects requests with CR in header field name", async () => {
+      const mockHandler = createMockHandler();
+      server.on("request", mockHandler);
+      const { promise, resolve, reject } = Promise.withResolvers();
+      server.on("clientError", (err: any) => {
+        try {
+          expect(err.code).toBe("HPE_INVALID_HEADER_TOKEN");
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
       });
+
+      const msg = ["GET / HTTP/1.1", "Host: localhost", "Bad\rHeader: value", "", ""].join("\r\n");
+
+      const response = await sendRequest(msg);
+      expect(response).toInclude("400 Bad Request");
+      await promise;
+      expect(mockHandler).not.toHaveBeenCalled();
     });
-    await promise;
-    expect(res.headersSent).toBe(true);
-  } finally {
-    server.close();
-  }
-});
 
-it("should work when sending https.request with agent:false", async () => {
-  const { promise, resolve, reject } = Promise.withResolvers();
-  const client = https.request("https://example.com/", { agent: false });
-  client.on("error", reject);
-  client.on("close", resolve);
-  client.end();
-  await promise;
-});
+    test("rejects requests with CR in header field value", async () => {
+      const mockHandler = createMockHandler();
+      server.on("request", mockHandler);
+      const { promise, resolve, reject } = Promise.withResolvers();
+      server.on("clientError", (err: any) => {
+        try {
+          expect(err.code).toBe("HPE_INTERNAL");
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
 
-it("client should use chunked encoded if more than one write is called", async () => {
-  function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-  // Bun.serve is used here until #15576 or similar fix is merged
-  using server = Bun.serve({
-    port: 0,
-    hostname: "127.0.0.1",
-    fetch(req) {
-      if (req.headers.get("transfer-encoding") !== "chunked") {
-        return new Response("should be chunked encoding", { status: 500 });
+      const msg = ["GET / HTTP/1.1", "Host: localhost", "X-Custom: bad\rvalue", "", ""].join("\r\n");
+
+      const response = await sendRequest(msg);
+      expect(response).toInclude("400 Bad Request");
+      await promise;
+      expect(mockHandler).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Transfer-Encoding Attacks", () => {
+    test("rejects chunked requests with malformed chunk size", async () => {
+      const { promise, resolve, reject } = Promise.withResolvers();
+      server.on("clientError", (err: any) => {
+        try {
+          expect(err.code).toBe("HPE_INTERNAL");
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+
+      const msg = [
+        "POST / HTTP/1.1",
+        "Host: localhost",
+        "Transfer-Encoding: chunked",
+        "",
+        "XYZ\r\n", // Not a valid hex number
+        "data",
+        "0",
+        "",
+        "",
+      ].join("\r\n");
+
+      const response = await sendRequest(msg);
+      expect(response).toInclude("400 Bad Request");
+      await promise;
+    });
+
+    test("rejects chunked requests with invalid chunk ending", async () => {
+      const { promise, resolve, reject } = Promise.withResolvers();
+      server.on("clientError", (err: any) => {
+        try {
+          expect(err.code).toBe("HPE_INTERNAL");
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+
+      const msg = [
+        "POST / HTTP/1.1",
+        "Host: localhost",
+        "Transfer-Encoding: chunked",
+        "",
+        "4",
+        "dataXXXX", // Should be "data\r\n"
+        "0",
+        "",
+        "",
+      ].join("\r\n");
+
+      const response = await sendRequest(msg);
+      expect(response).toInclude("400 Bad Request");
+      await promise;
+    });
+  });
+
+  describe("HTTP Request Smuggling", () => {
+    test("rejects requests with both Content-Length and Transfer-Encoding", async () => {
+      const mockHandler = createMockHandler();
+      server.on("request", mockHandler);
+      const { promise, resolve, reject } = Promise.withResolvers();
+      server.on("clientError", (err: any) => {
+        try {
+          expect(err.code).toBe("HPE_INVALID_TRANSFER_ENCODING");
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+      const msg = [
+        "POST / HTTP/1.1",
+        "Host: localhost",
+        "Content-Length: 10",
+        "Transfer-Encoding: chunked",
+        "",
+        "5",
+        "hello",
+        "0",
+        "",
+        "",
+      ].join("\r\n");
+
+      const response = await sendRequest(msg);
+      expect(response).toInclude("400 Bad Request");
+      await promise;
+      expect(mockHandler).not.toHaveBeenCalled();
+    });
+
+    test("rejects requests with obfuscated Transfer-Encoding header", async () => {
+      const mockHandler = createMockHandler();
+      server.on("request", mockHandler);
+      const { promise, resolve, reject } = Promise.withResolvers();
+      server.on("clientError", (err: any) => {
+        try {
+          expect(err.code).toBe("HPE_INVALID_HEADER_TOKEN");
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+      const msg = [
+        "POST / HTTP/1.1",
+        "Host: localhost",
+        "Content-Length: 11",
+        "Transfer-Encoding : chunked", // Note the space before colon
+        "",
+        "5",
+        "hello",
+        "0",
+        "",
+        "",
+      ].join("\r\n");
+
+      const response = await sendRequest(msg);
+      expect(response).toInclude("400 Bad Request");
+      await promise;
+      expect(mockHandler).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("HTTP Protocol Violations", () => {
+    test("rejects requests with invalid HTTP version", async () => {
+      const mockHandler = createMockHandler();
+      server.on("request", mockHandler);
+      const { promise, resolve, reject } = Promise.withResolvers();
+      server.on("clientError", (err: any) => {
+        try {
+          expect(err.code).toBe("HPE_INTERNAL");
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+      const msg = [
+        "GET / HTTP/9.9", // Invalid HTTP version
+        "Host: localhost",
+        "",
+        "",
+      ].join("\r\n");
+
+      const response = await sendRequest(msg);
+      expect(response).toInclude("505 HTTP Version Not Supported");
+      await promise;
+      expect(mockHandler).not.toHaveBeenCalled();
+    });
+
+    test("rejects requests with missing Host header in HTTP/1.1", async () => {
+      const mockHandler = createMockHandler();
+      server.on("request", mockHandler);
+      const { promise, resolve, reject } = Promise.withResolvers();
+      server.on("clientError", (err: any) => {
+        try {
+          expect(err.code).toBe("HPE_INTERNAL");
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+      const msg = [
+        "GET / HTTP/1.1",
+        // Missing Host header
+        "",
+        "",
+      ].join("\r\n");
+
+      const response = await sendRequest(msg);
+      expect(response).toInclude("400 Bad Request");
+      await promise;
+      expect(mockHandler).not.toHaveBeenCalled();
+    });
+  });
+
+  test("Server should not crash in clientError is emitted when calling destroy", async () => {
+    await using server = http.createServer(async (req, res) => {
+      res.end("Hello World");
+    });
+
+    const clientErrors: Promise<void>[] = [];
+    server.on("clientError", (err, socket) => {
+      clientErrors.push(
+        Bun.sleep(10).then(() => {
+          socket.destroy();
+        }),
+      );
+    });
+    await once(server.listen(), "listening");
+    const address = server.address() as AddressInfo;
+
+    async function doRequests(address: AddressInfo) {
+      const client = connect(address.port, address.address, () => {
+        client.write("GET / HTTP/1.1\r\nHost: localhost:3000\r\nContent-Length: 0\r\n\r\n");
+      });
+      {
+        const { promise, resolve, reject } = Promise.withResolvers<string>();
+        client.on("data", resolve);
+        client.on("error", reject);
+        client.on("end", resolve);
+        await promise;
       }
-      return new Response(req.body);
-    },
-  });
-
-  // Options for the HTTP request
-  const options = {
-    hostname: "127.0.0.1", // Replace with the target server
-    port: server.port,
-    path: "/api/data",
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-  };
-
-  const { promise, resolve, reject } = Promise.withResolvers();
-
-  // Create the request
-  const req = http.request(options, res => {
-    if (res.statusCode !== 200) {
-      reject(new Error("Body should be chunked"));
+      {
+        const { promise, resolve, reject } = Promise.withResolvers<string>();
+        client.write("GET / HTTP/1.1\r\nContent-Length: 0\r\n\r\n");
+        client.on("error", reject);
+        client.on("end", resolve);
+        await promise;
+      }
     }
-    const chunks = [];
-    // Collect the response data
-    res.on("data", chunk => {
-      chunks.push(chunk);
-    });
 
-    res.on("end", () => {
-      resolve(chunks);
-    });
-  });
-
-  // Handle errors
-  req.on("error", reject);
-
-  // Write chunks to the request body
-
-  for (let i = 0; i < 4; i++) {
-    req.write("chunk");
-    await sleep(50);
-    req.write(" ");
-    await sleep(50);
-  }
-  req.write("BUN!");
-  // End the request and signal no more data will be sent
-  req.end();
-
-  const chunks = await promise;
-  expect(chunks.length).toBeGreaterThan(1);
-  expect(chunks[chunks.length - 1]?.toString()).toEndWith("BUN!");
-  expect(Buffer.concat(chunks).toString()).toBe("chunk ".repeat(4) + "BUN!");
-});
-
-it("client should use content-length if only one write is called", async () => {
-  await using server = http.createServer((req, res) => {
-    if (req.headers["transfer-encoding"] === "chunked") {
-      return res.writeHead(500).end();
+    async function doInvalidRequests(address: AddressInfo) {
+      const client = connect(address.port, address.address, () => {
+        client.write("GET / HTTP/1.1\r\nContent-Length: 0\r\n\r\n");
+      });
+      const { promise, resolve, reject } = Promise.withResolvers<string>();
+      client.on("error", reject);
+      client.on("close", resolve);
+      await promise;
     }
-    res.writeHead(200);
-    req.on("data", data => {
-      res.write(data);
-    });
-    req.on("end", () => {
-      res.end();
-    });
+
+    await doRequests(address);
+    await Promise.all(clientErrors);
+    clientErrors.length = 0;
+    await doInvalidRequests(address);
+    await Promise.all(clientErrors);
   });
 
-  await once(server.listen(0, "127.0.0.1"), "listening");
+  test("flushHeaders should send the headers immediately", async () => {
+    let headers_sent_at: number = 0;
 
-  // Options for the HTTP request
-  const options = {
-    hostname: "127.0.0.1", // Replace with the target server
-    port: server.address().port,
-    path: "/api/data",
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-  };
-
-  const { promise, resolve, reject } = Promise.withResolvers();
-
-  // Create the request
-  const req = http.request(options, res => {
-    if (res.statusCode !== 200) {
-      reject(new Error("Body should not be chunked"));
-    }
-    const chunks = [];
-    // Collect the response data
-    res.on("data", chunk => {
-      chunks.push(chunk);
+    let server_res: http.ServerResponse | undefined;
+    await using server = http.createServer(async (req, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      headers_sent_at = Date.now();
+      server_res = res;
+      res.flushHeaders();
     });
 
-    res.on("end", () => {
-      resolve(chunks);
+    await once(server.listen(0, "127.0.0.1"), "listening");
+    const address = server.address() as AddressInfo;
+    const response = await fetch(`http://127.0.0.1:${address.port}`);
+    expect(Date.now() - headers_sent_at).toBeLessThan(100);
+    expect(server_res).toBeDefined();
+    server_res!.write("Hello", () => {
+      server_res!.end(" World");
     });
+    const text = await response.text();
+    expect(text).toBe("Hello World");
   });
-  // Handle errors
-  req.on("error", reject);
-  // Write chunks to the request body
-  req.write("Hello World BUN!");
-  // End the request and signal no more data will be sent
-  req.end();
-
-  const chunks = await promise;
-  expect(chunks.length).toBe(1);
-  expect(chunks[0]?.toString()).toBe("Hello World BUN!");
-  expect(Buffer.concat(chunks).toString()).toBe("Hello World BUN!");
 });

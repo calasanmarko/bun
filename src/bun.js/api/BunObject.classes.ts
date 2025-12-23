@@ -46,7 +46,6 @@ export default [
     construct: true,
     noConstructor: true,
     finalize: true,
-    hasPendingActivity: true,
     configurable: false,
     memoryCost: true,
     klass: {},
@@ -117,10 +116,16 @@ export default [
       },
       exited: {
         getter: "getExited",
+        this: true,
       },
       stdio: {
         getter: "getStdio",
       },
+      terminal: {
+        getter: "getTerminal",
+        cache: true,
+      },
     },
+    values: ["exitedPromise", "onExitCallback", "onDisconnectCallback", "ipcCallback"],
   }),
 ];

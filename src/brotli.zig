@@ -1,16 +1,9 @@
-const bun = @import("root").bun;
-const std = @import("std");
-pub const c = struct {
-    pub usingnamespace @import("./deps/brotli_decoder.zig");
-    pub usingnamespace @import("./deps/brotli_encoder.zig");
-};
+pub const c = @import("./deps/brotli_c.zig");
 const BrotliDecoder = c.BrotliDecoder;
 const BrotliEncoder = c.BrotliEncoder;
 
-const mimalloc = bun.Mimalloc;
-
 pub const BrotliAllocator = struct {
-    pub fn alloc(_: ?*anyopaque, len: usize) callconv(.C) *anyopaque {
+    pub fn alloc(_: ?*anyopaque, len: usize) callconv(.c) *anyopaque {
         if (bun.heap_breakdown.enabled) {
             const zone = bun.heap_breakdown.getZone("brotli");
             return zone.malloc_zone_malloc(len) orelse bun.outOfMemory();
@@ -19,7 +12,7 @@ pub const BrotliAllocator = struct {
         return mimalloc.mi_malloc(len) orelse bun.outOfMemory();
     }
 
-    pub fn free(_: ?*anyopaque, data: ?*anyopaque) callconv(.C) void {
+    pub fn free(_: ?*anyopaque, data: ?*anyopaque) callconv(.c) void {
         if (bun.heap_breakdown.enabled) {
             const zone = bun.heap_breakdown.getZone("brotli");
             zone.malloc_zone_free(data);
@@ -59,7 +52,7 @@ pub const BrotliReaderArrayList = struct {
     finishFlushOp: BrotliEncoder.Operation,
     fullFlushOp: BrotliEncoder.Operation,
 
-    pub usingnamespace bun.New(BrotliReaderArrayList);
+    pub const new = bun.TrivialNew(BrotliReaderArrayList);
 
     pub fn newWithOptions(input: []const u8, list: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, options: DecoderOptions) !*BrotliReaderArrayList {
         return BrotliReaderArrayList.new(try initWithOptions(input, list, allocator, options, .process, .finish, .flush));
@@ -165,9 +158,11 @@ pub const BrotliReaderArrayList = struct {
                     }
                     this.state = .Inflating;
                     if (is_done) {
+                        // Stream is truncated - we're at EOF but decoder needs more data
                         this.state = .Error;
+                        return error.BrotliDecompressionError;
                     }
-
+                    // Not at EOF - we can retry with more data
                     return error.ShortRead;
                 },
                 .needs_more_output => {
@@ -180,7 +175,7 @@ pub const BrotliReaderArrayList = struct {
 
     pub fn deinit(this: *BrotliReaderArrayList) void {
         this.brotli.destroyInstance();
-        this.destroy();
+        bun.destroy(this);
     }
 };
 
@@ -251,7 +246,7 @@ pub const BrotliCompressionStream = struct {
 
             const Self = @This();
             pub const WriteError = error{BrotliCompressionError} || InputWriter.Error;
-            pub const Writer = std.io.Writer(@This(), WriteError, Self.write);
+            pub const Writer = std.Io.GenericWriter(@This(), WriteError, Self.write);
 
             pub fn init(compressor: *BrotliCompressionStream, input_writer: InputWriter) Self {
                 return Self{
@@ -285,3 +280,8 @@ pub const BrotliCompressionStream = struct {
         return this.writerContext(writable).writer();
     }
 };
+
+const std = @import("std");
+
+const bun = @import("bun");
+const mimalloc = bun.mimalloc;

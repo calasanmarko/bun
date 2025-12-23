@@ -3,8 +3,8 @@
 // work because hmr-runtime is minified in release builds, which would affect
 // the generated line/column numbers across different build configurations.
 import { expect } from "bun:test";
-import { Dev, devTest, emptyHtmlFile, extractScriptSrc, reactRefreshStub } from "../dev-server-harness";
 import { BasicSourceMapConsumer, IndexedSourceMapConsumer, SourceMapConsumer } from "source-map";
+import { Dev, devTest, emptyHtmlFile } from "../bake-harness";
 
 devTest("source map emitted for primary chunk", {
   files: {
@@ -38,23 +38,23 @@ devTest("source map emitted for primary chunk", {
 });
 devTest("source map emitted for hmr chunk", {
   files: {
-    ...reactRefreshStub,
     "index.html": emptyHtmlFile({
       scripts: ["index.ts"],
     }),
     "index.ts": `
-      import "react-refresh/runtime";
       import other from "./App";
       console.log("Hello, " + other + "!");
+      import.meta.hot.accept();
     `,
     "App.tsx": `
       console.log("some text here");
       export default "world";
+      import.meta.hot.accept();
     `,
   },
   async test(dev) {
     await using c = await dev.client("/", { storeHotChunks: true });
-    await dev.write("App.tsx", "// yay\nconsole.log('magic');");
+    await dev.write("App.tsx", "// yay\nconsole.log('magic');\nimport.meta.hot.accept();");
     const chunk = await c.getMostRecentHmrChunk();
     using sourceMap = await extractSourceMap(dev, chunk);
     expect(sourceMap.sources.slice(1).map(Bun.fileURLToPath)) //
@@ -78,7 +78,11 @@ type SourceMap = (BasicSourceMapConsumer | IndexedSourceMapConsumer) & {
 };
 
 async function extractSourceMapHtml(dev: Dev, html: string) {
-  const scriptUrl = extractScriptSrc(html);
+  const scriptUrls = [...html.matchAll(/src="([^"]+.js)"/g)];
+  if (scriptUrls.length !== 1) {
+    throw new Error("Expected 1 source file, got " + scriptUrls.length);
+  }
+  const scriptUrl = scriptUrls[0][1];
   const scriptSource = await dev.fetch(scriptUrl).text();
   return extractSourceMap(dev, scriptSource);
 }
@@ -89,6 +93,10 @@ async function extractSourceMap(dev: Dev, scriptSource: string) {
     throw new Error("Source map URL not found in " + scriptSource);
   }
   const sourceMap = await dev.fetch(sourceMapUrl[1]).text();
+  if (!sourceMap.startsWith("{")) {
+    throw new Error("Source map is not valid JSON: " + sourceMap);
+  }
+  console.log(sourceMap);
   return new Promise<SourceMap>((resolve, reject) => {
     try {
       SourceMapConsumer.with(sourceMap, null, async (consumer: any) => {
@@ -113,7 +121,12 @@ function indexOfLineColumn(text: string, search: string) {
 }
 
 function charOffsetToLineColumn(text: string, offset: number) {
-  let line = 1;
+  // sourcemap lines are 0-based.
+  // > If present, the **zero-based** starting line in the original source. This
+  // > field contains a base64 VLQ relative to the previous occurrence of this
+  // > field, unless it is the first occurrence of this field, in which case the
+  // > whole value is represented. Shall be present if there is a source field.
+  let line = 0;
   let i = 0;
   let prevI = 0;
   while (i < offset) {
@@ -125,5 +138,5 @@ function charOffsetToLineColumn(text: string, offset: number) {
     i = nextIndex + 1;
     line++;
   }
-  return { line: 1 + line, column: offset - prevI };
+  return { line: line, column: offset - prevI };
 }

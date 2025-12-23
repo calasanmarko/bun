@@ -1,29 +1,11 @@
-const std = @import("std");
-const bun = @import("root").bun;
 pub const css = @import("../css_parser.zig");
 const Result = css.Result;
-const ArrayList = std.ArrayListUnmanaged;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
-const CSSNumber = css.css_values.number.CSSNumber;
-const CSSNumberFns = css.css_values.number.CSSNumberFns;
-const Calc = css.css_values.calc.Calc;
 const DimensionPercentage = css.css_values.percentage.DimensionPercentage;
 const LengthPercentage = css.css_values.length.LengthPercentage;
-const Length = css.css_values.length.Length;
 const LengthOrNumber = css.css_values.length.LengthOrNumber;
-const Percentage = css.css_values.percentage.Percentage;
 const CssColor = css.css_values.color.CssColor;
-const Image = css.css_values.image.Image;
-const Url = css.css_values.url.Url;
-const CSSInteger = css.css_values.number.CSSInteger;
-const CSSIntegerFns = css.css_values.number.CSSIntegerFns;
-const Angle = css.css_values.angle.Angle;
-const Time = css.css_values.time.Time;
-const Resolution = css.css_values.resolution.Resolution;
-const CustomIdent = css.css_values.ident.CustomIdent;
-const CustomIdentFns = css.css_values.ident.CustomIdentFns;
-const Ident = css.css_values.ident.Ident;
 
 fn needsDeinit(comptime T: type) bool {
     return switch (T) {
@@ -127,25 +109,25 @@ pub fn Rect(comptime T: type) type {
             return .{ .result = This{ .top = first, .right = second, .bottom = third, .left = fourth } };
         }
 
-        pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
-            try css.generic.toCss(T, &this.top, W, dest);
+        pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
+            try css.generic.toCss(T, &this.top, dest);
             const same_vertical = css.generic.eql(T, &this.top, &this.bottom);
             const same_horizontal = css.generic.eql(T, &this.right, &this.left);
             if (same_vertical and same_horizontal and css.generic.eql(T, &this.top, &this.right)) {
                 return;
             }
             try dest.writeStr(" ");
-            try css.generic.toCss(T, &this.right, W, dest);
+            try css.generic.toCss(T, &this.right, dest);
             if (same_vertical and same_horizontal) {
                 return;
             }
             try dest.writeStr(" ");
-            try css.generic.toCss(T, &this.bottom, W, dest);
+            try css.generic.toCss(T, &this.bottom, dest);
             if (same_horizontal) {
                 return;
             }
             try dest.writeStr(" ");
-            try css.generic.toCss(T, &this.left, W, dest);
+            try css.generic.toCss(T, &this.left, dest);
         }
 
         pub fn valParse(i: *css.Parser) Result(T) {
@@ -157,3 +139,5 @@ pub fn Rect(comptime T: type) type {
         }
     };
 }
+
+const std = @import("std");

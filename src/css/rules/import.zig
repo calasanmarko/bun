@@ -1,19 +1,9 @@
-const std = @import("std");
-const bun = @import("root").bun;
 pub const css = @import("../css_parser.zig");
-const Error = css.Error;
-const ArrayList = std.ArrayListUnmanaged;
 const MediaList = css.MediaList;
-const CustomMedia = css.CustomMedia;
 const Printer = css.Printer;
-const Maybe = css.Maybe;
-const PrinterError = css.PrinterError;
 const PrintErr = css.PrintErr;
 const Dependency = css.Dependency;
 const dependencies = css.dependencies;
-const Url = css.css_values.url.Url;
-const Size2D = css.css_values.size.Size2D;
-const fontprops = css.css_properties.font;
 const LayerName = css.css_rules.layer.LayerName;
 const SupportsCondition = css.css_rules.supports.SupportsCondition;
 const Location = css.css_rules.Location;
@@ -56,12 +46,12 @@ pub const ImportConditions = struct {
         };
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *Printer) PrintErr!void {
         if (this.layer) |*lyr| {
             try dest.writeStr(" layer");
             if (lyr.v) |l| {
                 try dest.writeChar('(');
-                try l.toCss(W, dest);
+                try l.toCss(dest);
                 try dest.writeChar(')');
             }
         }
@@ -69,17 +59,17 @@ pub const ImportConditions = struct {
         if (this.supports) |*sup| {
             try dest.writeStr(" supports");
             if (sup.* == .declaration) {
-                try sup.toCss(W, dest);
+                try sup.toCss(dest);
             } else {
                 try dest.writeChar('(');
-                try sup.toCss(W, dest);
+                try sup.toCss(dest);
                 try dest.writeChar(')');
             }
         }
 
         if (this.media.media_queries.items.len > 0) {
             try dest.writeChar(' ');
-            try this.media.toCss(W, dest);
+            try this.media.toCss(dest);
         }
     }
 
@@ -216,11 +206,13 @@ pub const ImportRule = struct {
         return this.layer != null or this.supports != null or this.media.media_queries.items.len > 0;
     }
 
-    pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
         const dep = if (dest.dependencies != null) dependencies.ImportDependency.new(
             dest.allocator,
             this,
             dest.filename(),
+            dest.local_names,
+            dest.symbols,
         ) else null;
 
         // #[cfg(feature = "sourcemap")]
@@ -244,7 +236,7 @@ pub const ImportRule = struct {
             try dest.writeStr(" layer");
             if (lyr.v) |l| {
                 try dest.writeChar('(');
-                try l.toCss(W, dest);
+                try l.toCss(dest);
                 try dest.writeChar(')');
             }
         }
@@ -252,17 +244,17 @@ pub const ImportRule = struct {
         if (this.supports) |*sup| {
             try dest.writeStr(" supports");
             if (sup.* == .declaration) {
-                try sup.toCss(W, dest);
+                try sup.toCss(dest);
             } else {
                 try dest.writeChar('(');
-                try sup.toCss(W, dest);
+                try sup.toCss(dest);
                 try dest.writeChar(')');
             }
         }
 
         if (this.media.media_queries.items.len > 0) {
             try dest.writeChar(' ');
-            try this.media.toCss(W, dest);
+            try this.media.toCss(dest);
         }
         try dest.writeStr(";");
     }
@@ -271,3 +263,6 @@ pub const ImportRule = struct {
         return css.implementDeepClone(@This(), this, allocator);
     }
 };
+
+const bun = @import("bun");
+const std = @import("std");

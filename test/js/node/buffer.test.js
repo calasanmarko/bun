@@ -21,8 +21,18 @@ afterEach(() => gc());
  */
 const NumberIsInteger = Number.isInteger;
 class ERR_INVALID_ARG_TYPE extends TypeError {
-  constructor() {
-    super("Invalid arg type" + Array.prototype.join.call(arguments, " "));
+  constructor(name, type, value) {
+    let inspected;
+    if (typeof value === "string") {
+      if (value.indexOf("'") === -1) {
+        inspected = `'${value}'`;
+      } else {
+        inspected = `${JSON.stringify(value)}`;
+      }
+    } else {
+      inspected = Bun.inspect(value);
+    }
+    super(`The "${name}" argument must be of type ${type}. Received type ${typeof value} (${inspected})`);
     this.code = "ERR_INVALID_ARG_TYPE";
   }
 }
@@ -101,7 +111,7 @@ const validateInteger = (value, name, min = Number.MIN_SAFE_INTEGER, max = Numbe
   if (value < min || value > max) throw new ERR_OUT_OF_RANGE(name, `>= ${min} && <= ${max}`, value);
 };
 const validateOffset = (value, name, min = 0, max = kMaxLength) => validateInteger(value, name, min, max);
-function nodeJSBufferWriteFn(string, offset, length, encoding = "utf8") {
+function nodeJSBufferWriteFn(string, offset, length, encoding) {
   // Buffer#write(string);
   if (offset === undefined) {
     return this.utf8Write(string, 0, this.length);
@@ -129,7 +139,8 @@ function nodeJSBufferWriteFn(string, offset, length, encoding = "utf8") {
     }
   }
 
-  if (!encoding) return this.utf8Write(string, offset, length);
+  if (!encoding || encoding === "utf8") return this.utf8Write(string, offset, length);
+  if (encoding === "ascii") return this.asciiWrite(string, offset, length);
 
   const ops = getEncodingOps(encoding);
   if (ops === undefined) throw new ERR_UNKNOWN_ENCODING(encoding);
@@ -182,6 +193,7 @@ for (let withOverridenBufferWrite of [false, true]) {
         expect(isAscii(new Buffer(""))).toBeTrue();
         expect(isAscii(new Buffer([32, 32, 128]))).toBeFalse();
         expect(isAscii(new Buffer("What did the 🦊 say?"))).toBeFalse();
+        expect(new isAscii(new Buffer("What did the 🦊 say?"))).toBeFalse();
         expect(isAscii(new Buffer("").buffer)).toBeTrue();
         expect(isAscii(new Buffer([32, 32, 128]).buffer)).toBeFalse();
       });
@@ -270,7 +282,9 @@ for (let withOverridenBufferWrite of [false, true]) {
         // Invalid encoding for Buffer.write
         expect(() => b.write("test string", 0, 5, "invalid")).toThrow(/encoding/);
         // Unsupported arguments for Buffer.write
-        expect(() => b.write("test", "utf8", 0)).toThrow(/invalid/i);
+        expect(() => b.write("test", "utf8", 0)).toThrow(
+          `The "offset" argument must be of type number. Received type string ('utf8')`,
+        );
       });
 
       it("create 0-length buffers", () => {
@@ -299,6 +313,50 @@ for (let withOverridenBufferWrite of [false, true]) {
         // Offset points to the end of the buffer and does not throw.
         // (see https://github.com/nodejs/node/issues/8127).
         Buffer.alloc(1).write("", 1, 0);
+      });
+
+      it("write BigInt beyond 64-bit range", () => {
+        const b = Buffer.allocUnsafe(64);
+        for (const signedFunction of ["writeBigInt64BE", "writeBigInt64LE"]) {
+          expect(() => b[signedFunction](-(2n ** 63n) - 1n)).toThrow(RangeError);
+          expect(() => b[signedFunction](2n ** 63n)).toThrow(RangeError);
+          expect(() => b[signedFunction](-(2n ** 65n))).toThrow(RangeError);
+          expect(() => b[signedFunction](2n ** 65n)).toThrow(RangeError);
+        }
+        for (const unsignedFunction of ["writeBigUInt64BE", "writeBigUInt64LE"]) {
+          expect(() => b[unsignedFunction](-1n)).toThrow(RangeError);
+          expect(() => b[unsignedFunction](2n ** 64n)).toThrow(RangeError);
+          expect(() => b[unsignedFunction](-(2n ** 65n))).toThrow(RangeError);
+          expect(() => b[unsignedFunction](2n ** 65n)).toThrow(RangeError);
+        }
+      });
+
+      it("write BigInt64 with insufficient buffer space", () => {
+        // Test for bounds check fix - prevent unsigned integer underflow
+        // when byteLength < 8, the check `offset > byteLength - 8` would underflow
+        const buf = Buffer.from("Hello World");
+        const slice = buf.slice(0, 5); // 5 bytes
+
+        for (const fn of ["writeBigInt64LE", "writeBigInt64BE", "writeBigUInt64LE", "writeBigUInt64BE"]) {
+          // Should throw because we need 8 bytes but only have 5
+          expect(() => slice[fn](4096n, 0)).toThrow(RangeError);
+          // Should also throw with large invalid offset
+          expect(() => slice[fn](4096n, 10000)).toThrow(RangeError);
+        }
+
+        // Test exact boundary - 8 bytes should work at offset 0
+        const buf8 = Buffer.allocUnsafe(8);
+        for (const fn of ["writeBigInt64LE", "writeBigInt64BE", "writeBigUInt64LE", "writeBigUInt64BE"]) {
+          expect(buf8[fn](4096n, 0)).toBe(8);
+          // But should fail at offset 1 (not enough space)
+          expect(() => buf8[fn](4096n, 1)).toThrow(RangeError);
+        }
+
+        // Test very small buffers
+        const buf7 = Buffer.allocUnsafe(7);
+        for (const fn of ["writeBigInt64LE", "writeBigInt64BE", "writeBigUInt64LE", "writeBigUInt64BE"]) {
+          expect(() => buf7[fn](0n, 0)).toThrow(RangeError);
+        }
       });
 
       it("copy() beyond end of buffer", () => {
@@ -444,6 +502,7 @@ for (let withOverridenBufferWrite of [false, true]) {
           const c = Buffer.from([0, 0, 0, 0, 0]);
           expect(c.length).toBe(5);
           expect(c.write("あいうえお", encoding)).toBe(4);
+          console.log(c.toString(encoding), { encoding });
           expect(c).toStrictEqual(Buffer.from([0x42, 0x30, 0x44, 0x30, 0x00]));
         });
 
@@ -937,11 +996,24 @@ for (let withOverridenBufferWrite of [false, true]) {
 
       it("offset returns are correct", () => {
         const b = Buffer.allocUnsafe(16);
-        expect(b.writeUInt32LE(0, 0)).toBe(4);
-        expect(b.writeUInt16LE(0, 4)).toBe(6);
-        expect(b.writeUInt8(0, 6)).toBe(7);
-        expect(b.writeInt8(0, 7)).toBe(8);
-        expect(b.writeDoubleLE(0, 8)).toBe(16);
+        expect(b.writeInt8(0, 2)).toBe(3);
+        expect(b.writeUInt8(0, 2)).toBe(3);
+        expect(b.writeInt16LE(0, 2)).toBe(4);
+        expect(b.writeInt16BE(0, 2)).toBe(4);
+        expect(b.writeUInt16LE(0, 2)).toBe(4);
+        expect(b.writeUInt16BE(0, 2)).toBe(4);
+        expect(b.writeInt32LE(0, 2)).toBe(6);
+        expect(b.writeInt32BE(0, 2)).toBe(6);
+        expect(b.writeUInt32LE(0, 2)).toBe(6);
+        expect(b.writeUInt32BE(0, 2)).toBe(6);
+        expect(b.writeFloatLE(0, 2)).toBe(6);
+        expect(b.writeFloatBE(0, 2)).toBe(6);
+        expect(b.writeDoubleLE(0, 2)).toBe(10);
+        expect(b.writeDoubleBE(0, 2)).toBe(10);
+        expect(b.writeBigInt64LE(0n, 2)).toBe(10);
+        expect(b.writeBigInt64BE(0n, 2)).toBe(10);
+        expect(b.writeBigUInt64LE(0n, 2)).toBe(10);
+        expect(b.writeBigUInt64BE(0n, 2)).toBe(10);
       });
 
       it("unmatched surrogates should not produce invalid utf8 output", () => {
@@ -1831,6 +1903,16 @@ for (let withOverridenBufferWrite of [false, true]) {
         expect(b.indexOf("b", {})).toBe(1);
         expect(b.indexOf("b", null)).toBe(1);
         expect(b.indexOf("b", [])).toBe(1);
+
+        expect(b.indexOf("f", 5)).toBe(5);
+        expect(b.indexOf("d", 2)).toBe(3);
+        expect(b.indexOf("f", -1)).toBe(5);
+        expect(b.indexOf("f", 6)).toBe(-1);
+
+        expect(b.indexOf(100, 2)).toBe(3);
+        expect(b.indexOf(102, 5)).toBe(5);
+        expect(b.indexOf(102, -1)).toBe(5);
+        expect(b.indexOf(102, 6)).toBe(-1);
       });
 
       it("lastIndexOf", () => {
@@ -2761,7 +2843,6 @@ for (let withOverridenBufferWrite of [false, true]) {
         expect(latin1Write.call(buf, "í", 28)).toBe(1);
         expect(latin1Write.call(buf, "é", 30)).toBe(1);
         expect(latin1Write.call(buf, "ò", 32)).toBe(1);
-        expect(latin1Write.call(buf, "ò", 32, 999999)).toBe(1);
 
         expect(buf).toStrictEqual(
           new Uint8Array(Buffer.from("6f6c64206d63646f6e616c6420686164206120666172e920ed20e920ed20e920f2", "hex")),
@@ -2782,6 +2863,16 @@ for (let withOverridenBufferWrite of [false, true]) {
         expect(buf.hexSlice()).toStrictEqual("30313233343536373839");
         expect(buf.hexSlice(3)).toStrictEqual("33343536373839");
         expect(buf.hexSlice(3, 4)).toStrictEqual("33");
+      });
+
+      // Regression test: large buffers that would produce strings exceeding max string length
+      it("Buffer.hexSlice() throws for large buffers", () => {
+        const { MAX_STRING_LENGTH } = require("buffer").constants;
+        // Hex output is 2x input size, so buffer size > MAX_STRING_LENGTH/2 will overflow
+        const largeBuffer = Buffer.allocUnsafe(Math.floor(MAX_STRING_LENGTH / 2) + 1);
+        expect(() => largeBuffer.hexSlice()).toThrow(
+          `Cannot create a string longer than ${MAX_STRING_LENGTH} characters`,
+        );
       });
 
       it("Buffer.ucs2Slice()", () => {
@@ -3007,4 +3098,89 @@ it("Buffer.from(arrayBuffer, byteOffset, length)", () => {
   expect(buf.byteOffset).toBe(3);
   expect(buf.byteLength).toBe(5);
   expect(buf[Symbol.iterator]().toArray()).toEqual([13, 14, 15, 16, 17]);
+});
+
+describe("ERR_BUFFER_OUT_OF_BOUNDS", () => {
+  for (const method of ["writeBigInt64BE", "writeBigInt64LE", "writeBigUInt64BE", "writeBigUInt64LE"]) {
+    for (const bufferLength of [0, 1, 2, 3, 4, 5, 6]) {
+      const buffer = Buffer.allocUnsafe(bufferLength);
+      it(`Buffer(${bufferLength}).${method}`, () => {
+        expect(() => buffer[method](0n)).toThrow(
+          expect.objectContaining({
+            code: "ERR_BUFFER_OUT_OF_BOUNDS",
+          }),
+        );
+        expect(() => buffer[method](0n, 0)).toThrow(
+          expect.objectContaining({
+            code: "ERR_BUFFER_OUT_OF_BOUNDS",
+          }),
+        );
+      });
+    }
+  }
+
+  for (const method of ["readBigInt64BE", "readBigInt64LE", "readBigUInt64BE", "readBigUInt64LE"]) {
+    for (const bufferLength of [0, 1, 2, 3, 4, 5, 6]) {
+      const buffer = Buffer.allocUnsafe(bufferLength);
+      it(`Buffer(${bufferLength}).${method}`, () => {
+        expect(() => buffer[method]()).toThrow(
+          expect.objectContaining({
+            code: "ERR_BUFFER_OUT_OF_BOUNDS",
+          }),
+        );
+        expect(() => buffer[method](0)).toThrow(
+          expect.objectContaining({
+            code: "ERR_BUFFER_OUT_OF_BOUNDS",
+          }),
+        );
+      });
+    }
+  }
+});
+
+describe("*Write methods with NaN/invalid offset and length", () => {
+  // Regression test: NaN offset/length values must be handled safely.
+  // NaN offset should be treated as 0, and length should be clamped to buffer size.
+  // This matches Node.js behavior where V8's IntegerValue converts NaN to 0.
+  const writeMethods = [
+    "utf8Write",
+    "utf16leWrite",
+    "latin1Write",
+    "asciiWrite",
+    "base64Write",
+    "base64urlWrite",
+    "hexWrite",
+  ];
+
+  for (const method of writeMethods) {
+    it(`${method} should handle NaN offset and custom length via ToNumber coercion`, () => {
+      // F1 is a function - ToNumber(F1) returns NaN, which should be treated as 0
+      function F1() {
+        if (!new.target) {
+          throw "must be called with new";
+        }
+      }
+      // C3 is a class constructor with Symbol.toPrimitive - ToNumber(C3) returns 215
+      class C3 {}
+      C3[Symbol.toPrimitive] = function () {
+        return 215;
+      };
+      const buf = Buffer.from("string");
+      // F1 as offset -> NaN -> 0, C3 as length -> 215 -> clamped to buf.length
+      // This should NOT crash, and should write to the buffer starting at offset 0
+      const result = buf[method]("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", F1, C3);
+      // Result should be clamped to buffer size
+      expect(result).toBeLessThanOrEqual(buf.length);
+    });
+
+    it(`${method} should throw on length larger than available buffer space`, () => {
+      const buf = Buffer.from("string");
+      // Length 1000 with valid offset 0 should throw ERR_BUFFER_OUT_OF_BOUNDS
+      expect(() => buf[method]("test".repeat(100), 0, 1000)).toThrow(
+        expect.objectContaining({
+          code: "ERR_BUFFER_OUT_OF_BOUNDS",
+        }),
+      );
+    });
+  }
 });

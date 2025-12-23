@@ -4,15 +4,6 @@
 // FIFO of fixed size items
 // Usually used for e.g. byte buffers
 
-const std = @import("std");
-const math = std.math;
-const mem = std.mem;
-const Allocator = mem.Allocator;
-const debug = std.debug;
-const assert = debug.assert;
-const testing = std.testing;
-const bun = @import("root").bun;
-
 pub const LinearFifoBufferType = union(enum) {
     /// The buffer is internal to the fifo; it is of the specified size.
     Static: usize,
@@ -46,8 +37,8 @@ pub fn LinearFifo(
         count: usize,
 
         const Self = @This();
-        pub const Reader = std.io.Reader(*Self, error{}, readFn);
-        pub const Writer = std.io.Writer(*Self, error{OutOfMemory}, appendWrite);
+        pub const Reader = std.Io.GenericReader(*Self, error{}, readFn);
+        pub const Writer = std.Io.GenericWriter(*Self, error{OutOfMemory}, appendWrite);
 
         // Type of Self argument for slice operations.
         // If buffer is inline (Static) then we need to ensure we haven't
@@ -97,7 +88,7 @@ pub fn LinearFifo(
                 bun.copy(T, self.buf[0..self.count], self.buf[self.head..][0..self.count]);
                 self.head = 0;
             } else {
-                var tmp: [mem.page_size / 2 / @sizeOf(T)]T = undefined;
+                var tmp: [std.heap.page_size_min / 2 / @sizeOf(T)]T = undefined;
 
                 while (self.head != 0) {
                     const n = @min(self.head, tmp.len);
@@ -132,6 +123,7 @@ pub fn LinearFifo(
         pub fn ensureTotalCapacity(self: *Self, size: usize) !void {
             if (self.buf.len >= size) return;
             if (buffer_type == .Dynamic) {
+                self.realign();
                 const new_size = if (powers_of_two) math.ceilPowerOfTwo(usize, size) catch return error.OutOfMemory else size;
                 const buf = try self.allocator.alloc(T, new_size);
                 if (self.count > 0) {
@@ -380,10 +372,58 @@ pub fn LinearFifo(
             return self.buf[index];
         }
 
+        /// Returns the item at `offset`.
+        /// Asserts offset is within bounds.
+        pub fn peekItemMut(self: *Self, offset: usize) *T {
+            assert(offset < self.count);
+
+            var index = self.head + offset;
+            if (powers_of_two) {
+                index &= self.buf.len - 1;
+            } else {
+                index %= self.buf.len;
+            }
+            return &self.buf[index];
+        }
+
+        /// Remove one item at `offset` and MOVE all items after it up one.
+        pub fn orderedRemoveItem(self: *Self, offset: usize) void {
+            if (offset == 0) return self.discard(1);
+
+            assert(offset < self.count);
+
+            if (self.buf.len - self.head >= self.count) {
+                // If it doesnt overflow past the end, there is one copy to be done
+                const rest = self.buf[self.head + offset ..];
+                bun.copy(T, rest[0 .. rest.len - 1], rest[1..]);
+            } else {
+                var index = self.head + offset;
+                if (powers_of_two) {
+                    index &= self.buf.len - 1;
+                } else {
+                    index %= self.buf.len;
+                }
+                if (index < self.head) {
+                    // If the item to remove is before the head, one slice is moved.
+                    const rest = self.buf[index .. self.count - self.head];
+                    bun.copy(T, rest[0 .. rest.len - 1], rest[1..]);
+                } else {
+                    // The items before and after the head have to be shifted
+                    const wrap = self.buf[0];
+                    const right = self.buf[index..];
+                    bun.copy(T, right[0 .. right.len - 1], right[1..]);
+                    self.buf[self.buf.len - 1] = wrap;
+                    const left = self.buf[0 .. self.head - self.count];
+                    bun.copy(T, left[0 .. left.len - 1], left[1..]);
+                }
+            }
+            self.count -= 1;
+        }
+
         /// Pump data from a reader into a writer
         /// stops when reader returns 0 bytes (EOF)
         /// Buffer size must be set before calling; a buffer length of 0 is invalid.
-        pub fn pump(self: *Self, src_reader: anytype, dest_writer: anytype) !void {
+        pub fn pump(self: *Self, src_reader: anytype, dest_writer: *std.Io.Writer) !void {
             assert(self.buf.len > 0);
             while (true) {
                 if (self.writableLength() > 0) {
@@ -534,3 +574,15 @@ test "LinearFifo" {
         }
     }
 }
+
+const bun = @import("bun");
+
+const std = @import("std");
+const math = std.math;
+const testing = std.testing;
+
+const debug = std.debug;
+const assert = debug.assert;
+
+const mem = std.mem;
+const Allocator = mem.Allocator;

@@ -1,30 +1,9 @@
-const std = @import("std");
 pub const css = @import("../css_parser.zig");
-const bun = @import("root").bun;
 const Result = css.Result;
-const ArrayList = std.ArrayListUnmanaged;
-const MediaList = css.MediaList;
-const CustomMedia = css.CustomMedia;
 const Printer = css.Printer;
 const Maybe = css.Maybe;
-const PrinterError = css.PrinterError;
 const PrintErr = css.PrintErr;
-const Dependency = css.Dependency;
-const dependencies = css.dependencies;
-const Url = css.css_values.url.Url;
-const Size2D = css.css_values.size.Size2D;
-const fontprops = css.css_properties.font;
-const LayerName = css.css_rules.layer.LayerName;
-const SupportsCondition = css.css_rules.supports.SupportsCondition;
 const Location = css.css_rules.Location;
-const Angle = css.css_values.angle.Angle;
-const FontStyleProperty = css.css_properties.font.FontStyle;
-const FontFamily = css.css_properties.font.FontFamily;
-const FontWeight = css.css_properties.font.FontWeight;
-const FontStretch = css.css_properties.font.FontStretch;
-const CustomProperty = css.css_properties.custom.CustomProperty;
-const CustomPropertyName = css.css_properties.custom.CustomPropertyName;
-const DashedIdent = css.css_values.ident.DashedIdent;
 
 /// A [page selector](https://www.w3.org/TR/css-page-3/#typedef-page-selector)
 /// within a `@page` rule.
@@ -53,7 +32,7 @@ pub const PageSelector = struct {
                         .result => |vv| vv,
                         .err => |e| return .{ .err = e },
                     },
-                ) catch bun.outOfMemory();
+                ) catch |err| bun.handleOom(err);
             } else {
                 input.reset(&state);
                 break;
@@ -74,14 +53,14 @@ pub const PageSelector = struct {
 
     const This = @This();
 
-    pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
         if (this.name) |name| {
             try dest.writeStr(name);
         }
 
         for (this.pseudo_classes.items) |*pseudo| {
             try dest.writeChar(':');
-            try pseudo.toCss(W, dest);
+            try pseudo.toCss(dest);
         }
     }
 
@@ -100,13 +79,13 @@ pub const PageMarginRule = struct {
 
     const This = @This();
 
-    pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
         // #[cfg(feature = "sourcemap")]
         // dest.add_mapping(self.loc);
 
         try dest.writeChar('@');
-        try this.margin_box.toCss(W, dest);
-        try this.declarations.toCssBlock(W, dest);
+        try this.margin_box.toCss(dest);
+        try this.declarations.toCssBlock(dest);
     }
 
     pub fn deepClone(this: *const @This(), allocator: std.mem.Allocator) @This() {
@@ -156,7 +135,7 @@ pub const PageRule = struct {
 
     const This = @This();
 
-    pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
         // #[cfg(feature = "sourcemap")]
         // dest.add_mapping(self.loc);
         try dest.writeStr("@page");
@@ -173,7 +152,7 @@ pub const PageRule = struct {
                 } else {
                     try dest.delim(',', false);
                 }
-                try selector.toCss(W, dest);
+                try selector.toCss(dest);
             }
         }
 
@@ -190,7 +169,7 @@ pub const PageRule = struct {
             const important = comptime std.mem.eql(u8, decl_field_name, "important_declarations");
             for (decls.items) |*decl| {
                 try dest.newline();
-                try decl.toCss(W, dest, important);
+                try decl.toCss(dest, important);
                 if (i != len - 1 or !dest.minify) {
                     try dest.writeChar(';');
                 }
@@ -214,7 +193,7 @@ pub const PageRule = struct {
                     }
                     try dest.newline();
                 }
-                try rule.toCss(W, dest);
+                try rule.toCss(dest);
             }
         }
 
@@ -251,8 +230,8 @@ pub const PagePseudoClass = enum {
         return css.enum_property_util.parse(@This(), input);
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *Printer(W)) PrintErr!void {
-        return css.enum_property_util.toCss(@This(), this, W, dest);
+    pub fn toCss(this: *const @This(), dest: *Printer) PrintErr!void {
+        return css.enum_property_util.toCss(@This(), this, dest);
     }
 
     pub fn deepClone(this: *const @This(), allocator: std.mem.Allocator) @This() {
@@ -307,8 +286,8 @@ pub const PageMarginBox = enum {
         return css.enum_property_util.parse(@This(), input);
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *Printer(W)) PrintErr!void {
-        return css.enum_property_util.toCss(@This(), this, W, dest);
+    pub fn toCss(this: *const @This(), dest: *Printer) PrintErr!void {
+        return css.enum_property_util.toCss(@This(), this, dest);
     }
 };
 
@@ -376,8 +355,8 @@ pub const PageRuleParser = struct {
                     .line = loc.line,
                     .column = loc.column,
                 },
-            }) catch bun.outOfMemory();
-            return Result(AtRuleParser.AtRule).success;
+            }) catch |err| bun.handleOom(err);
+            return .success;
         }
 
         pub fn ruleWithoutBlock(_: *This, _: AtRuleParser.Prelude, _: *const css.ParserState) css.Maybe(AtRuleParser.AtRule, void) {
@@ -398,3 +377,8 @@ pub const PageRuleParser = struct {
         }
     };
 };
+
+const bun = @import("bun");
+
+const std = @import("std");
+const ArrayList = std.ArrayListUnmanaged;

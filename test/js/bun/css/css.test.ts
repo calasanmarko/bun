@@ -4,18 +4,17 @@
 
 import { describe, test } from "bun:test";
 import "harness";
+import { join } from "path";
 import {
-  attrTest,
   cssTest,
   indoc,
-  minify_test,
-  prefix_test,
-  minifyTestWithOptions as minify_test_with_options,
   minify_error_test_with_options,
+  minify_test,
+  minifyTestWithOptions as minify_test_with_options,
   ParserFlags,
   ParserOptions,
+  prefix_test,
 } from "./util";
-import { join } from "path";
 
 function Some(n: number): number {
   return n;
@@ -54,6 +53,51 @@ describe("css tests", () => {
     '.foo{content:"+";}',
   );
 
+  describe("custom property cases", () => {
+    cssTest(
+      `div {
+        --foo: 1 1 1 rgba(1, 1, 1, 0.1), 2 2 2 rgba(2, 2, 2, 0.2);
+        --bar: 1 1 1 #01010116, 2 2 2 #02020233;
+      }`,
+      `div {
+        --foo: 1 1 1 #0101011a, 2 2 2 #02020233;
+        --bar: 1 1 1 #01010116, 2 2 2 #02020233;
+       }`,
+    );
+    cssTest(
+      `:root {
+        --my-color: red;
+        --my-bg: white;
+        --my-font-size: 16px;
+      }
+      .element {
+        color: var(--my-color);
+        background-color: var(--my-bg);
+        font-size: var(--my-font-size);
+      }`,
+      `:root {
+        --my-color: red;
+        --my-bg: white;
+        --my-font-size: 16px;
+      }
+      .element {
+        color: var(--my-color);
+        background-color: var(--my-bg);
+        font-size: var(--my-font-size);
+       }`,
+    );
+    cssTest(
+      `div {
+        --custom-padding: calc(20px * 10px);
+        padding: var(--custom-padding);
+      }`,
+      `div {
+        --custom-padding: calc(20px * 10px);
+        padding: var(--custom-padding);
+       }`,
+    );
+  });
+
   describe("pseudo-class edge case", () => {
     cssTest(
       indoc`[type="file"]::file-selector-button:-moz-any() {
@@ -84,15 +128,26 @@ describe("css tests", () => {
     );
   });
 
-  test("calc edge case", () => {
+  describe("calc edge case", () => {
+    // https://github.com/oven-sh/bun/issues/18064
     minify_test(
-      // Problem: the value is being printed as Infinity in our restrict_prec thing but the internal thing actually wants it as 3.40282e38px
       `.rounded-full {
   border-radius: calc(infinity * 1px);
   width: calc(infinity * -1px);
+  height: infinity;
 }`,
-      indoc`.rounded-full{border-radius:1e999px;width:-1e999px}`,
+      indoc`.rounded-full{height:infinity;border-radius:3.40282e38px;width:-3.40282e38px}`,
     );
+  });
+  describe("calc stack overflow", () => {
+    // https://github.com/oven-sh/bun/issues/20128
+    minify_test(`a { width: calc(100% - 2 - 1) }`, `a{width:calc(100% - 2 - 1)}`); // ideally 100% - 3
+    minify_test(`a { width: calc(100% - 2 - 1 + 5vh - 10vh) }`, `a{width:calc(100% - 2 - 1 - 5vh)}`); // ideally 100% - 3 + 5vh
+    minify_test(
+      `a { width: calc(10 - 4 - 100% - 2 - 4 - 300% - 8vh + 3ic) }`,
+      `a{width:calc(6 - 400% - 2 - 4 - 8vh + 3ic)}`,
+    ); // ideally -400% - 8vh + 3ic
+    minify_test(`a { top: calc(100% - 1 * 2 - 8 * 2); }`, `a{top:calc(100% - 2 - 16)}`); // ideally 100% - 18
   });
   describe("border_spacing", () => {
     minify_test(
@@ -4385,6 +4440,24 @@ describe("css tests", () => {
       ".foo { background: linear-gradient(0.5turn, yellow, blue); }",
       ".foo{background:linear-gradient(#ff0,#00f)}",
     );
+    // Test case for the crash fix with 0.25turn
+    minify_test(
+      ".foo { background: linear-gradient(0.25turn, rgb(2, 0, 36) 0%, rgb(1, 53, 164) 100%); }",
+      ".foo{background:linear-gradient(.25turn,#020024 0%,#0135a4 100%)}",
+    );
+    // Additional angle unit tests to ensure the fix works for various cases
+    minify_test(
+      ".foo { background: linear-gradient(0.25turn, yellow, blue); }",
+      ".foo{background:linear-gradient(.25turn,#ff0,#00f)}",
+    );
+    minify_test(
+      ".foo { background: linear-gradient(0.75turn, yellow, blue); }",
+      ".foo{background:linear-gradient(.75turn,#ff0,#00f)}",
+    );
+    minify_test(
+      ".foo { background: linear-gradient(1turn, yellow, blue); }",
+      ".foo{background:linear-gradient(1turn,#ff0,#00f)}",
+    );
     minify_test(
       ".foo { background: linear-gradient(yellow 10%, blue 20%) }",
       ".foo{background:linear-gradient(#ff0 10%,#00f 20%)}",
@@ -5502,6 +5575,9 @@ describe("css tests", () => {
       minify_test(`:root::${name}(*) {position: fixed}`, `:root::${name}(*){position:fixed}`);
       minify_test(`:root::${name}(foo) {position: fixed}`, `:root::${name}(foo){position:fixed}`);
       minify_test(`:root::${name}(foo):only-child {position: fixed}`, `:root::${name}(foo):only-child{position:fixed}`);
+      // Test class selector syntax (.class-name)
+      minify_test(`:root::${name}(.slide-out) {position: fixed}`, `:root::${name}(.slide-out){position:fixed}`);
+      minify_test(`:root::${name}(.fade-in) {animation-name: fade}`, `:root::${name}(.fade-in){animation-name:fade}`);
       error_test(
         `:root::${name}(foo):first-child {position: fixed}`,
         "ParserError::SelectorError(SelectorError::InvalidPseudoClassAfterPseudoElement)",
@@ -6894,6 +6970,14 @@ describe("css tests", () => {
     minify_test(".foo { transform: scale3d(1, 2, 1)", ".foo{transform:scaleY(2)}");
     minify_test(".foo { transform: scale3d(1, 1, 2)", ".foo{transform:scaleZ(2)}");
     minify_test(".foo { transform: scale3d(2, 2, 1)", ".foo{transform:scale(2)}");
+    minify_test(".foo { transform: rotate(20rad)", ".foo{transform:rotate(20rad)}");
+    minify_test(".foo { transform: rotateX(20rad)", ".foo{transform:rotateX(20rad)}");
+    minify_test(".foo { transform: rotateY(20rad)", ".foo{transform:rotateY(20rad)}");
+    minify_test(".foo { transform: rotateZ(20rad)", ".foo{transform:rotate(20rad)}");
+    minify_test(".foo { transform: rotateX(0.017453293rad)", ".foo{transform:rotateX(1deg)}");
+    minify_test(".foo { transform: rotateY(0.017453293rad)", ".foo{transform:rotateY(1deg)}");
+    minify_test(".foo { transform: rotateZ(0.017453293rad)", ".foo{transform:rotate(1deg)}");
+    minify_test(".foo { transform: rotate(0.017453293rad)", ".foo{transform:rotate(1deg)}");
     minify_test(".foo { transform: rotate(20deg)", ".foo{transform:rotate(20deg)}");
     minify_test(".foo { transform: rotateX(20deg)", ".foo{transform:rotateX(20deg)}");
     minify_test(".foo { transform: rotateY(20deg)", ".foo{transform:rotateY(20deg)}");
@@ -7220,6 +7304,68 @@ describe("css tests", () => {
       ".foo { color: color-mix(in srgb, light-dark(yellow, red), light-dark(red, pink)); }",
       `.foo {
           color: var(--buncss-light, #ff8000) var(--buncss-dark, #ff6066);
+        }
+        `,
+      { chrome: Some(90 << 16) },
+    );
+
+    // Test color-scheme inside @layer blocks (issue #20689)
+    prefix_test(
+      `@layer colors {
+        .foo { color-scheme: dark; }
+      }`,
+      `@layer colors {
+          .foo {
+            --buncss-light: ;
+            --buncss-dark: initial;
+            color-scheme: dark;
+          }
+        }
+        `,
+      { chrome: Some(90 << 16) },
+    );
+    prefix_test(
+      `@layer shm.colors {
+        body.theme-dark {
+          color-scheme: dark;
+        }
+        body.theme-light {
+          color-scheme: light;
+        }
+      }`,
+      `@layer shm.colors {
+          body.theme-dark {
+            --buncss-light: ;
+            --buncss-dark: initial;
+            color-scheme: dark;
+          }
+
+          body.theme-light {
+            --buncss-light: initial;
+            --buncss-dark: ;
+            color-scheme: light;
+          }
+        }
+        `,
+      { chrome: Some(90 << 16) },
+    );
+    prefix_test(
+      `@layer {
+        .foo { color-scheme: light dark; }
+      }`,
+      `@layer {
+          .foo {
+            --buncss-light: initial;
+            --buncss-dark: ;
+            color-scheme: light dark;
+          }
+
+          @media (prefers-color-scheme: dark) {
+            .foo {
+              --buncss-light: ;
+              --buncss-dark: initial;
+            }
+          }
         }
         `,
       { chrome: Some(90 << 16) },

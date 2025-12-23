@@ -11,6 +11,7 @@ describe("CryptoHasher", () => {
     expect(CryptoHasher.algorithms).toEqual([
       "blake2b256",
       "blake2b512",
+      "blake2s256",
       "md4",
       "md5",
       "ripemd160",
@@ -34,6 +35,7 @@ describe("CryptoHasher", () => {
   const expected = {
     blake2b256: "256c83b297114d201b30179f3f0ef0cace9783622da5974326b436178aeef610",
     blake2b512: "021ced8799296ceca557832ab941a50b4a11f83478cf141f51f933f653ab9fbcc05a037cddbed06e309bf334942c4e58cdf1a46e237911ccd7fcf9787cbc7fd0",
+    blake2s256: "9aec6806794561107e594b1f6a8a6b0c92a0cba9acf5e5e93cca06f781813b0b",
     md4: "aa010fbc1d14c795d86ef98c95479d17",
     md5: "5eb63bbbe01eeed093cb22bb8f5acdc3",
     ripemd160: "98c615784ccb5fe5936fbc0cbe9dfdb408d92f0f",
@@ -55,6 +57,7 @@ describe("CryptoHasher", () => {
   const expectedBitLength = {
     blake2b256: 256,
     blake2b512: 512,
+    blake2s256: 256,
     md4: 128,
     md5: 128,
     ripemd160: 160,
@@ -280,18 +283,18 @@ it("should send cipher events in the right order", async () => {
     stderr: "pipe",
     env: bunEnv,
   });
-  const err = await new Response(stderr).text();
+  const err = await stderr.text();
   expect(err).toBeEmpty();
-  const out = await new Response(stdout).text();
+  const out = await stdout.text();
   // TODO: prefinish and readable (on both cipher and decipher) should be flipped
   // This seems like a bug in our crypto code, which
   expect(out.split("\n")).toEqual([
-    `[ "cipher", "prefinish" ]`,
     `[ "cipher", "readable" ]`,
+    `[ "cipher", "prefinish" ]`,
     `[ "cipher", "data" ]`,
     `[ 1, "dfb6b7e029be3ad6b090349ed75931f28f991b52ca9a89f5bf6f82fa1c87aa2d624bd77701dcddfcceaf3add7d66ce06ced17aebca4cb35feffc4b8b9008b3c4" ]`,
-    `[ "decipher", "prefinish" ]`,
     `[ "decipher", "readable" ]`,
+    `[ "decipher", "prefinish" ]`,
     `[ "decipher", "data" ]`,
     `[ 2, "4f7574206f6620746865206d6f756e7461696e206f6620646573706169722c20612073746f6e65206f6620686f70652e" ]`,
     `[ 3, "Out of the mountain of despair, a stone of hope." ]`,

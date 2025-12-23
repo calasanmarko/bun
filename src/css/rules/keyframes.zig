@@ -1,20 +1,7 @@
-const std = @import("std");
 pub const css = @import("../css_parser.zig");
-const bun = @import("root").bun;
-const ArrayList = std.ArrayListUnmanaged;
-const MediaList = css.MediaList;
-const CustomMedia = css.CustomMedia;
 const Printer = css.Printer;
 const Maybe = css.Maybe;
-const PrinterError = css.PrinterError;
 const PrintErr = css.PrintErr;
-const Dependency = css.Dependency;
-const dependencies = css.dependencies;
-const Url = css.css_values.url.Url;
-const Size2D = css.css_values.size.Size2D;
-const fontprops = css.css_properties.font;
-const LayerName = css.css_rules.layer.LayerName;
-const SupportsCondition = css.css_rules.supports.SupportsCondition;
 const Location = css.css_rules.Location;
 const Result = css.Result;
 
@@ -141,7 +128,7 @@ pub const KeyframesName = union(enum) {
         }
     }
 
-    pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
         const css_module_aimation_enabled = if (dest.css_module) |css_module| css_module.config.animation else false;
 
         switch (this.*) {
@@ -181,20 +168,20 @@ pub const KeyframeSelector = union(enum) {
     to,
 
     // TODO: implement this
-    pub usingnamespace css.DeriveParse(@This());
+    pub const parse = css.DeriveParse(@This()).parse;
 
     // pub fn parse(input: *css.Parser) Result(KeyframeSelector) {
     //     _ = input; // autofix
     //     @panic(css.todo_stuff.depth);
     // }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *Printer) PrintErr!void {
         switch (this.*) {
             .percentage => |p| {
                 if (dest.minify and p.v == 1.0) {
                     try dest.writeStr("to");
                 } else {
-                    try p.toCss(W, dest);
+                    try p.toCss(dest);
                 }
             },
             .from => {
@@ -226,17 +213,17 @@ pub const Keyframe = struct {
 
     const This = @This();
 
-    pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
         var first = true;
         for (this.selectors.items) |sel| {
             if (!first) {
                 try dest.delim(',', false);
             }
             first = false;
-            try sel.toCss(W, dest);
+            try sel.toCss(dest);
         }
 
-        try this.declarations.toCssBlock(W, dest);
+        try this.declarations.toCssBlock(dest);
     }
 
     pub fn deepClone(this: *const @This(), allocator: std.mem.Allocator) @This() {
@@ -257,18 +244,14 @@ pub const KeyframesRule = struct {
 
     const This = @This();
 
-    pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
         // #[cfg(feature = "sourcemap")]
         // dest.add_mapping(self.loc);
 
         var first_rule = true;
 
-        const PREFIXES = .{ "webkit", "moz", "ms", "o", "none" };
-
-        inline for (PREFIXES) |prefix_name| {
-            const prefix = css.VendorPrefix.fromName(prefix_name);
-
-            if (this.vendor_prefix.contains(prefix)) {
+        inline for (.{ "webkit", "moz", "ms", "o", "none" }) |prefix_name| {
+            if (@field(this.vendor_prefix, prefix_name)) {
                 if (first_rule) {
                     first_rule = false;
                 } else {
@@ -279,9 +262,9 @@ pub const KeyframesRule = struct {
                 }
 
                 try dest.writeChar('@');
-                try prefix.toCss(W, dest);
+                try css.VendorPrefix.fromName(prefix_name).toCss(dest);
                 try dest.writeStr("keyframes ");
-                try this.name.toCss(W, dest);
+                try this.name.toCss(dest);
                 try dest.whitespace();
                 try dest.writeChar('{');
                 dest.indent();
@@ -294,7 +277,7 @@ pub const KeyframesRule = struct {
                         try dest.writeChar('\n'); // no indent
                     }
                     try dest.newline();
-                    try keyframe.toCss(W, dest);
+                    try keyframe.toCss(dest);
                 }
                 dest.dedent();
                 try dest.newline();
@@ -313,3 +296,8 @@ pub const KeyframesRule = struct {
         return css.implementDeepClone(@This(), this, allocator);
     }
 };
+
+const bun = @import("bun");
+
+const std = @import("std");
+const ArrayList = std.ArrayListUnmanaged;

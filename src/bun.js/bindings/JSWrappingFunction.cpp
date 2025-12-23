@@ -24,20 +24,18 @@ JS_EXPORT_PRIVATE JSWrappingFunction* JSWrappingFunction::create(
     Zig::NativeFunctionPtr functionPointer,
     JSC::JSValue wrappedFnValue)
 {
-    JSC::JSFunction* wrappedFn = jsCast<JSC::JSFunction*>(wrappedFnValue.asCell());
+    JSC::JSObject* wrappedFn = wrappedFnValue.getObject();
     ASSERT(wrappedFn != nullptr);
 
-    auto nameStr = symbolName->tag == BunStringTag::Empty ? WTF::String(""_s) : symbolName->toWTFString();
+    auto nameStr = symbolName->tag == BunStringTag::Empty ? WTF::emptyString() : symbolName->toWTFString();
     auto name = Identifier::fromString(vm, nameStr);
     NativeExecutable* executable = vm.getHostFunction(functionPointer, ImplementationVisibility::Public, nullptr, nameStr);
 
     // Structure* structure = globalObject->FFIFunctionStructure();
     Structure* structure = JSWrappingFunction::createStructure(vm, globalObject, globalObject->objectPrototype());
-    JSWrappingFunction* function = new (NotNull, allocateCell<JSWrappingFunction>(vm)) JSWrappingFunction(vm, executable, globalObject, structure);
+    JSWrappingFunction* function = new (NotNull, allocateCell<JSWrappingFunction>(vm)) JSWrappingFunction(vm, executable, globalObject, structure, wrappedFn);
     ASSERT(function->structure()->globalObject());
     function->finishCreation(vm, executable, 0, nameStr);
-
-    function->m_wrappedFn.set(vm, globalObject, wrappedFn);
 
     return function;
 }
@@ -77,12 +75,12 @@ extern "C" JSC::EncodedJSValue Bun__JSWrappingFunction__getWrappedFunction(
     Zig::GlobalObject* globalObject)
 {
     JSC::JSValue thisValue = JSC::JSValue::decode(thisValueEncoded);
-    JSWrappingFunction* thisObject = jsCast<JSWrappingFunction*>(thisValue.asCell());
+    JSWrappingFunction* thisObject = jsDynamicCast<JSWrappingFunction*>(thisValue.asCell());
     if (thisObject != nullptr) {
-        JSC::JSFunction* wrappedFn = thisObject->m_wrappedFn.get();
+        JSC::JSObject* wrappedFn = thisObject->m_wrappedFn.get();
         return JSC::JSValue::encode(wrappedFn);
     }
-    return JSC::JSValue::encode({});
+    return {};
 }
 
 }

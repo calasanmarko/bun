@@ -1,28 +1,11 @@
-const std = @import("std");
-const bun = @import("root").bun;
 pub const css = @import("../css_parser.zig");
 const Result = css.Result;
-const ArrayList = std.ArrayListUnmanaged;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
 const CSSNumber = css.css_values.number.CSSNumber;
 const CSSNumberFns = css.css_values.number.CSSNumberFns;
-const Calc = css.css_values.calc.Calc;
-const DimensionPercentage = css.css_values.percentage.DimensionPercentage;
-const LengthPercentage = css.css_values.length.LengthPercentage;
-const Length = css.css_values.length.Length;
-const Percentage = css.css_values.percentage.Percentage;
-const CssColor = css.css_values.color.CssColor;
-const Image = css.css_values.image.Image;
-const Url = css.css_values.url.Url;
 const CSSInteger = css.css_values.number.CSSInteger;
 const CSSIntegerFns = css.css_values.number.CSSIntegerFns;
-const Angle = css.css_values.angle.Angle;
-const Time = css.css_values.time.Time;
-const Resolution = css.css_values.resolution.Resolution;
-const CustomIdent = css.css_values.ident.CustomIdent;
-const CustomIdentFns = css.css_values.ident.CustomIdentFns;
-const Ident = css.css_values.ident.Ident;
 
 /// A CSS [easing function](https://www.w3.org/TR/css-easing-1/#easing-functions).
 pub const EasingFunction = union(enum) {
@@ -159,7 +142,7 @@ pub const EasingFunction = union(enum) {
         );
     }
 
-    pub fn toCss(this: *const EasingFunction, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const EasingFunction, dest: *css.Printer) css.PrintErr!void {
         return switch (this.*) {
             .linear => try dest.writeStr("linear"),
             .ease => try dest.writeStr("ease"),
@@ -195,13 +178,13 @@ pub const EasingFunction = union(enum) {
                 switch (this.*) {
                     .cubic_bezier => |cb| {
                         try dest.writeStr("cubic-bezier(");
-                        try css.generic.toCss(CSSNumber, &cb.x1, W, dest);
+                        try css.generic.toCss(CSSNumber, &cb.x1, dest);
                         try dest.writeChar(',');
-                        try css.generic.toCss(CSSNumber, &cb.y1, W, dest);
+                        try css.generic.toCss(CSSNumber, &cb.y1, dest);
                         try dest.writeChar(',');
-                        try css.generic.toCss(CSSNumber, &cb.x2, W, dest);
+                        try css.generic.toCss(CSSNumber, &cb.x2, dest);
                         try dest.writeChar(',');
-                        try css.generic.toCss(CSSNumber, &cb.y2, W, dest);
+                        try css.generic.toCss(CSSNumber, &cb.y2, dest);
                         try dest.writeChar(')');
                     },
                     .steps => {
@@ -213,7 +196,7 @@ pub const EasingFunction = union(enum) {
                         }
                         try dest.writeFmt("steps({d}", .{this.steps.count});
                         try dest.delim(',', false);
-                        try this.steps.position.toCss(W, dest);
+                        try this.steps.position.toCss(dest);
                         return try dest.writeChar(')');
                     },
                     .linear, .ease, .ease_in, .ease_out, .ease_in_out => unreachable,
@@ -231,11 +214,11 @@ pub const EasingFunction = union(enum) {
     pub fn isEase(this: *const EasingFunction) bool {
         return this.* == .ease or
             (this.* == .cubic_bezier and this.cubic_bezier.eql(&.{
-            .x1 = 0.25,
-            .y1 = 0.1,
-            .x2 = 0.25,
-            .y2 = 1.0,
-        }));
+                .x1 = 0.25,
+                .y1 = 0.1,
+                .x2 = 0.25,
+                .y2 = 1.0,
+            }));
     }
 };
 
@@ -250,7 +233,7 @@ pub const StepPosition = enum {
     /// The first rise occurs at input progress value of 0 and the last rise occurs at input progress value of 1.
     @"jump-both",
 
-    pub usingnamespace css.DeriveToCss(@This());
+    pub const toCss = css.DeriveToCss(@This()).toCss;
 
     const Map = bun.ComptimeEnumMap(enum {
         start,
@@ -283,3 +266,6 @@ pub const StepPosition = enum {
         return .end;
     }
 };
+
+const bun = @import("bun");
+const std = @import("std");

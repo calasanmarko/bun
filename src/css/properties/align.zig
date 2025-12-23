@@ -1,8 +1,3 @@
-const std = @import("std");
-const bun = @import("root").bun;
-const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayListUnmanaged;
-
 pub const css = @import("../css_parser.zig");
 
 const Printer = css.Printer;
@@ -57,8 +52,8 @@ pub const AlignContent = union(enum) {
         }
     },
 
-    pub usingnamespace css.DeriveParse(@This());
-    pub usingnamespace css.DeriveToCss(@This());
+    pub const parse = css.DeriveParse(@This()).parse;
+    pub const toCss = css.DeriveToCss(@This()).toCss;
 
     pub fn eql(lhs: *const @This(), rhs: *const @This()) bool {
         return css.implementEql(@This(), lhs, rhs);
@@ -107,7 +102,7 @@ pub const BaselinePosition = enum {
             return .{ .err = location.newUnexpectedTokenError(.{ .ident = ident }) };
     }
 
-    pub fn toCss(this: *const BaselinePosition, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const BaselinePosition, dest: *css.Printer) css.PrintErr!void {
         return switch (this.*) {
             .first => try dest.writeStr("baseline"),
             .last => try dest.writeStr("last baseline"),
@@ -218,27 +213,27 @@ pub const JustifyContent = union(enum) {
             return .{ .err = location.newUnexpectedTokenError(.{ .ident = ident }) };
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *css.Printer) css.PrintErr!void {
         return switch (this.*) {
             .normal => dest.writeStr("normal"),
-            .content_distribution => |value| value.toCss(W, dest),
+            .content_distribution => |value| value.toCss(dest),
             .content_position => |*cp| {
                 if (cp.overflow) |*overflow| {
-                    try overflow.toCss(W, dest);
+                    try overflow.toCss(dest);
                     try dest.writeStr(" ");
                 }
-                return cp.value.toCss(W, dest);
+                return cp.value.toCss(dest);
             },
             .left => |*l| {
                 if (l.overflow) |*overflow| {
-                    try overflow.toCss(W, dest);
+                    try overflow.toCss(dest);
                     try dest.writeStr(" ");
                 }
                 return dest.writeStr("left");
             },
             .right => |*r| {
                 if (r.overflow) |*overflow| {
-                    try overflow.toCss(W, dest);
+                    try overflow.toCss(dest);
                     try dest.writeStr(" ");
                 }
                 return dest.writeStr("right");
@@ -300,8 +295,8 @@ pub const AlignSelf = union(enum) {
         }
     },
 
-    pub usingnamespace css.DeriveParse(@This());
-    pub usingnamespace css.DeriveToCss(@This());
+    pub const parse = css.DeriveParse(@This()).parse;
+    pub const toCss = css.DeriveToCss(@This()).toCss;
 
     pub fn deepClone(this: *const @This(), allocator: std.mem.Allocator) @This() {
         return css.implementDeepClone(@This(), this, allocator);
@@ -407,30 +402,30 @@ pub const JustifySelf = union(enum) {
         return .{ .err = location.newUnexpectedTokenError(.{ .ident = ident }) };
     }
 
-    pub fn toCss(this: *const JustifySelf, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const JustifySelf, dest: *css.Printer) css.PrintErr!void {
         return switch (this.*) {
             .auto => try dest.writeStr("auto"),
             .normal => try dest.writeStr("normal"),
             .stretch => try dest.writeStr("stretch"),
-            .baseline_position => |*baseline_position| baseline_position.toCss(W, dest),
+            .baseline_position => |*baseline_position| baseline_position.toCss(dest),
             .self_position => |*self_position| {
                 if (self_position.overflow) |*overflow| {
-                    try overflow.toCss(W, dest);
+                    try overflow.toCss(dest);
                     try dest.writeStr(" ");
                 }
 
-                try self_position.value.toCss(W, dest);
+                try self_position.value.toCss(dest);
             },
             .left => |*left| {
                 if (left.overflow) |*overflow| {
-                    try overflow.toCss(W, dest);
+                    try overflow.toCss(dest);
                     try dest.writeStr(" ");
                 }
                 try dest.writeStr("left");
             },
             .right => |*right| {
                 if (right.overflow) |*overflow| {
-                    try overflow.toCss(W, dest);
+                    try overflow.toCss(dest);
                     try dest.writeStr(" ");
                 }
                 try dest.writeStr("right");
@@ -494,8 +489,8 @@ pub const AlignItems = union(enum) {
         }
     },
 
-    pub usingnamespace css.DeriveParse(@This());
-    pub usingnamespace css.DeriveToCss(@This());
+    pub const parse = css.DeriveParse(@This()).parse;
+    pub const toCss = css.DeriveToCss(@This()).toCss;
 
     pub fn eql(lhs: *const @This(), rhs: *const @This()) bool {
         return css.implementEql(@This(), lhs, rhs);
@@ -602,33 +597,33 @@ pub const JustifyItems = union(enum) {
         return .{ .err = location.newUnexpectedTokenError(.{ .ident = ident }) };
     }
 
-    pub fn toCss(this: *const JustifyItems, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const JustifyItems, dest: *css.Printer) css.PrintErr!void {
         switch (this.*) {
             .normal => try dest.writeStr("normal"),
             .stretch => try dest.writeStr("stretch"),
-            .baseline_position => |*val| try val.toCss(W, dest),
+            .baseline_position => |*val| try val.toCss(dest),
             .self_position => |*sp| {
                 if (sp.overflow) |*overflow| {
-                    try overflow.toCss(W, dest);
+                    try overflow.toCss(dest);
                     try dest.writeStr(" ");
                 }
-                try sp.value.toCss(W, dest);
+                try sp.value.toCss(dest);
             },
             .left => |*l| {
                 if (l.overflow) |*overflow| {
-                    try overflow.toCss(W, dest);
+                    try overflow.toCss(dest);
                     try dest.writeStr(" ");
                 }
                 try dest.writeStr("left");
             },
             .right => |*r| {
                 if (r.overflow) |*overflow| {
-                    try overflow.toCss(W, dest);
+                    try overflow.toCss(dest);
                     try dest.writeStr(" ");
                 }
                 try dest.writeStr("right");
             },
-            .legacy => |l| try l.toCss(W, dest),
+            .legacy => |l| try l.toCss(dest),
         }
     }
 
@@ -702,7 +697,7 @@ pub const LegacyJustify = enum {
         return .{ .err = location.newUnexpectedTokenError(.{ .ident = ident }) };
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *css.Printer) css.PrintErr!void {
         try dest.writeStr("legacy ");
         switch (this.*) {
             .left => try dest.writeStr("left"),
@@ -728,8 +723,8 @@ pub const GapValue = union(enum) {
     /// An explicit length.
     length_percentage: LengthPercentage,
 
-    pub usingnamespace css.DeriveParse(@This());
-    pub usingnamespace css.DeriveToCss(@This());
+    pub const parse = css.DeriveParse(@This()).parse;
+    pub const toCss = css.DeriveToCss(@This()).toCss;
 
     pub fn eql(lhs: *const @This(), rhs: *const @This()) bool {
         return css.implementEql(@This(), lhs, rhs);
@@ -746,8 +741,6 @@ pub const Gap = struct {
     row: GapValue,
     /// The column gap.
     column: GapValue,
-
-    pub usingnamespace css.DefineShorthand(@This(), css.PropertyIdTag.gap, PropertyFieldMap);
 
     pub const PropertyFieldMap = .{
         .row = "row-gap",
@@ -766,11 +759,11 @@ pub const Gap = struct {
         return .{ .result = .{ .row = row, .column = column } };
     }
 
-    pub fn toCss(this: *const Gap, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
-        try this.row.toCss(W, dest);
+    pub fn toCss(this: *const Gap, dest: *css.Printer) css.PrintErr!void {
+        try this.row.toCss(dest);
         if (!this.column.eql(&this.row)) {
             try dest.writeStr(" ");
-            try this.column.toCss(W, dest);
+            try this.column.toCss(dest);
         }
     }
 
@@ -789,8 +782,6 @@ pub const PlaceItems = struct {
     @"align": AlignItems,
     /// The item justification.
     justify: JustifyItems,
-
-    pub usingnamespace css.DefineShorthand(@This(), css.PropertyIdTag.@"place-items", PropertyFieldMap);
 
     pub const PropertyFieldMap = .{
         .@"align" = "align-items",
@@ -824,8 +815,8 @@ pub const PlaceItems = struct {
         return .{ .result = .{ .@"align" = @"align", .justify = justify } };
     }
 
-    pub fn toCss(this: *const PlaceItems, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
-        try this.@"align".toCss(W, dest);
+    pub fn toCss(this: *const PlaceItems, dest: *css.Printer) css.PrintErr!void {
+        try this.@"align".toCss(dest);
         const is_equal = switch (this.justify) {
             .normal => this.@"align".eql(&AlignItems{ .normal = {} }),
             .stretch => this.@"align".eql(&AlignItems{ .stretch = {} }),
@@ -842,7 +833,7 @@ pub const PlaceItems = struct {
 
         if (!is_equal) {
             try dest.writeStr(" ");
-            try this.justify.toCss(W, dest);
+            try this.justify.toCss(dest);
         }
     }
 
@@ -861,8 +852,6 @@ pub const PlaceSelf = struct {
     @"align": AlignSelf,
     /// The item justification.
     justify: JustifySelf,
-
-    pub usingnamespace css.DefineShorthand(@This(), css.PropertyIdTag.@"place-self", PropertyFieldMap);
 
     pub const PropertyFieldMap = .{
         .@"align" = "align-self",
@@ -897,8 +886,8 @@ pub const PlaceSelf = struct {
         return .{ .result = .{ .@"align" = @"align", .justify = justify } };
     }
 
-    pub fn toCss(this: *const PlaceSelf, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
-        try this.@"align".toCss(W, dest);
+    pub fn toCss(this: *const PlaceSelf, dest: *css.Printer) css.PrintErr!void {
+        try this.@"align".toCss(dest);
         const is_equal = switch (this.justify) {
             .auto => true,
             .normal => this.@"align" == .normal,
@@ -916,7 +905,7 @@ pub const PlaceSelf = struct {
 
         if (!is_equal) {
             try dest.writeStr(" ");
-            try this.justify.toCss(W, dest);
+            try this.justify.toCss(dest);
         }
     }
 
@@ -946,7 +935,12 @@ pub const SelfPosition = enum {
     /// Item  is aligned to the end of the container, within flexbox layouts.
     @"flex-end",
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 /// A value for the [place-content](https://www.w3.org/TR/css-align-3/#place-content) shorthand property.
@@ -955,8 +949,6 @@ pub const PlaceContent = struct {
     @"align": AlignContent,
     /// The content justification.
     justify: JustifyContent,
-
-    pub usingnamespace css.DefineShorthand(@This(), css.PropertyIdTag.@"place-content", PropertyFieldMap);
 
     pub const PropertyFieldMap = .{
         .@"align" = css.PropertyIdTag.@"align-content",
@@ -992,8 +984,8 @@ pub const PlaceContent = struct {
         return .{ .result = .{ .@"align" = @"align", .justify = justify } };
     }
 
-    pub fn toCss(this: *const PlaceContent, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
-        try this.@"align".toCss(W, dest);
+    pub fn toCss(this: *const PlaceContent, dest: *css.Printer) css.PrintErr!void {
+        try this.@"align".toCss(dest);
         const is_equal = switch (this.justify) {
             .normal => brk: {
                 if (this.@"align" == .normal) break :brk true;
@@ -1012,7 +1004,7 @@ pub const PlaceContent = struct {
 
         if (!is_equal) {
             try dest.writeStr(" ");
-            try this.justify.toCss(W, dest);
+            try this.justify.toCss(dest);
         }
     }
 
@@ -1036,7 +1028,12 @@ pub const ContentDistribution = enum {
     /// Items are stretched evenly to fill free space.
     stretch,
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 /// An [`<overflow-position>`](https://www.w3.org/TR/css-align-3/#typedef-overflow-position) value.
@@ -1048,7 +1045,12 @@ pub const OverflowPosition = enum {
     /// container, the given alignment value is honored.
     unsafe,
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 /// A [`<content-position>`](https://www.w3.org/TR/css-align-3/#typedef-content-position) value.
@@ -1064,7 +1066,12 @@ pub const ContentPosition = enum {
     /// Same as `end` when within a flexbox container.
     @"flex-end",
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 pub const SelfPositionInner = struct {
@@ -1183,7 +1190,7 @@ pub const AlignHandler = struct {
             .unparsed => |*val| {
                 if (isAlignProperty(val.property_id)) {
                     this.flush(dest, context);
-                    dest.append(context.allocator, property.*) catch bun.outOfMemory();
+                    bun.handleOom(dest.append(context.allocator, property.*));
                 } else {
                     return false;
                 }
@@ -1264,14 +1271,14 @@ pub const AlignHandler = struct {
             dest.append(context.allocator, Property{ .gap = Gap{
                 .row = row_gap.?,
                 .column = column_gap.?,
-            } }) catch bun.outOfMemory();
+            } }) catch |err| bun.handleOom(err);
         } else {
             if (row_gap != null) {
-                dest.append(context.allocator, Property{ .@"row-gap" = row_gap.? }) catch bun.outOfMemory();
+                bun.handleOom(dest.append(context.allocator, Property{ .@"row-gap" = row_gap.? }));
             }
 
             if (column_gap != null) {
-                dest.append(context.allocator, Property{ .@"column-gap" = column_gap.? }) catch bun.outOfMemory();
+                bun.handleOom(dest.append(context.allocator, Property{ .@"column-gap" = column_gap.? }));
             }
         }
     }
@@ -1280,7 +1287,7 @@ pub const AlignHandler = struct {
         // If two vendor prefixes for the same property have different
         // values, we need to flush what we have immediately to preserve order.
         if (@field(this, prop)) |*v| {
-            if (!val.eql(&v[0]) and !v[1].contains(vp)) {
+            if (!val.eql(&v[0]) and !bun.bits.contains(VendorPrefix, v[1], vp)) {
                 this.flush(dest, context);
             }
         }
@@ -1291,7 +1298,7 @@ pub const AlignHandler = struct {
         // Otherwise, update the value and add the prefix.
         if (@field(this, prop)) |*tuple| {
             tuple.*[0] = css.generic.deepClone(@TypeOf(val.*), val, context.allocator);
-            tuple.*[1].insert(vp);
+            bun.bits.insert(VendorPrefix, &tuple.*[1], vp);
         } else {
             @field(this, prop) = .{ css.generic.deepClone(@TypeOf(val.*), val, context.allocator), vp };
             this.has_any = true;
@@ -1303,10 +1310,8 @@ pub const AlignHandler = struct {
         var prefix = context.targets.prefixes(VendorPrefix.NONE, feature);
         // Firefox only implemented the 2009 spec prefixed.
         // Microsoft only implemented the 2012 spec prefixed.
-        prefix.remove(VendorPrefix{
-            .moz = true,
-            .ms = true,
-        });
+        prefix.moz = false;
+        prefix.ms = false;
         return prefix;
     }
 
@@ -1315,8 +1320,8 @@ pub const AlignHandler = struct {
             const val = v[0];
             var prefix = v[1];
             // If we have an unprefixed property, override necessary prefixes.
-            prefix = if (prefix.contains(VendorPrefix.NONE)) flushPrefixesHelper(this, context, feature) else prefix;
-            dest.append(context.allocator, @unionInit(Property, prop, .{ val, prefix })) catch bun.outOfMemory();
+            prefix = if (prefix.none) flushPrefixesHelper(this, context, feature) else prefix;
+            bun.handleOom(dest.append(context.allocator, @unionInit(Property, prop, .{ val, prefix })));
         }
     }
 
@@ -1336,16 +1341,16 @@ pub const AlignHandler = struct {
             // If we have an unprefixed standard property, generate legacy prefixed versions.
             prefix = context.targets.prefixes(prefix, feature);
 
-            if (prefix.contains(VendorPrefix.NONE)) {
+            if (prefix.none) {
                 if (comptime prop_2009) |p2009| {
                     // 2009 spec, implemented by webkit and firefox.
                     if (context.targets.browsers) |targets| {
-                        var prefixes_2009 = VendorPrefix.empty();
+                        var prefixes_2009 = VendorPrefix{};
                         if (Feature.isFlex2009(targets)) {
-                            prefixes_2009.insert(VendorPrefix.WEBKIT);
+                            prefixes_2009.webkit = true;
                         }
-                        if (prefix.contains(VendorPrefix.MOZ)) {
-                            prefixes_2009.insert(VendorPrefix.MOZ);
+                        if (prefix.moz) {
+                            prefixes_2009.moz = true;
                         }
                         if (!prefixes_2009.isEmpty()) {
                             const s = brk: {
@@ -1357,7 +1362,7 @@ pub const AlignHandler = struct {
                                 dest.append(context.allocator, @unionInit(Property, p2009[1], .{
                                     a,
                                     prefixes_2009,
-                                })) catch bun.outOfMemory();
+                                })) catch |err| bun.handleOom(err);
                             }
                         }
                     }
@@ -1365,7 +1370,7 @@ pub const AlignHandler = struct {
             }
 
             // 2012 spec, implemented by microsoft.
-            if (prefix.contains(VendorPrefix.MS)) {
+            if (prefix.ms) {
                 if (comptime prop_2012) |p2012| {
                     const s = brk: {
                         const T = comptime p2012[0];
@@ -1376,14 +1381,14 @@ pub const AlignHandler = struct {
                         dest.append(context.allocator, @unionInit(Property, p2012[1], .{
                             q,
                             VendorPrefix.MS,
-                        })) catch bun.outOfMemory();
+                        })) catch |err| bun.handleOom(err);
                     }
                 }
             }
 
             // Remove Firefox and IE from standard prefixes.
-            prefix.remove(VendorPrefix.MOZ);
-            prefix.remove(VendorPrefix.MS);
+            prefix.moz = false;
+            prefix.ms = false;
         }
     }
 
@@ -1392,7 +1397,7 @@ pub const AlignHandler = struct {
         if (key) |v| {
             const val = v[0];
             const prefix = v[1];
-            dest.append(context.allocator, @unionInit(Property, prop, .{ val, prefix })) catch bun.outOfMemory();
+            bun.handleOom(dest.append(context.allocator, @unionInit(Property, prop, .{ val, prefix })));
         }
     }
 
@@ -1400,7 +1405,7 @@ pub const AlignHandler = struct {
         _ = this; // autofix
         if (key) |v| {
             const val = v;
-            dest.append(context.allocator, @unionInit(Property, prop, val)) catch bun.outOfMemory();
+            bun.handleOom(dest.append(context.allocator, @unionInit(Property, prop, val)));
         }
     }
 
@@ -1429,28 +1434,28 @@ pub const AlignHandler = struct {
 
                 const intersection = align_prefix.bitwiseAnd(if (comptime justify_prop != null) __v2.*[1] else align_prefix.*);
                 // Only use shorthand if unprefixed.
-                if (intersection.contains(VendorPrefix.NONE)) {
+                if (intersection.none) {
                     // Add prefixed longhands if needed.
                     align_prefix.* = flushPrefixesHelper(this, context, align_prop.feature);
-                    align_prefix.remove(VendorPrefix.NONE);
+                    align_prefix.none = false;
                     if (!align_prefix.isEmpty()) {
                         dest.append(
                             context.allocator,
                             @unionInit(Property, align_prop.prop, .{ css.generic.deepClone(@TypeOf(@"align".*), @"align", context.allocator), align_prefix.* }),
-                        ) catch bun.outOfMemory();
+                        ) catch |err| bun.handleOom(err);
                     }
 
                     if (comptime justify_prop != null) {
                         const justify_actual = &__v2.*[0];
                         const justify_prefix = &__v2.*[1];
                         justify_prefix.* = this.flushPrefixesHelper(context, justify_prop.?.feature);
-                        justify_prefix.remove(css.VendorPrefix.NONE);
+                        justify_prefix.none = false;
 
                         if (!justify_prefix.isEmpty()) {
                             dest.append(
                                 context.allocator,
                                 @unionInit(Property, justify_prop.?.prop, .{ css.generic.deepClone(@TypeOf(justify_actual.*), justify_actual, context.allocator), justify_prefix.* }),
-                            ) catch bun.outOfMemory();
+                            ) catch |err| bun.handleOom(err);
                         }
 
                         // Add shorthand.
@@ -1460,7 +1465,7 @@ pub const AlignHandler = struct {
                                 .@"align" = css.generic.deepClone(@TypeOf(@"align".*), @"align", context.allocator),
                                 .justify = css.generic.deepClone(@TypeOf(justify_actual.*), justify_actual, context.allocator),
                             }),
-                        ) catch bun.outOfMemory();
+                        ) catch |err| bun.handleOom(err);
                     } else {
 
                         // Add shorthand.
@@ -1470,7 +1475,7 @@ pub const AlignHandler = struct {
                                 .@"align" = css.generic.deepClone(@TypeOf(@"align".*), @"align", context.allocator),
                                 .justify = css.generic.deepClone(@TypeOf(justify.*), justify, context.allocator),
                             }),
-                        ) catch bun.outOfMemory();
+                        ) catch |err| bun.handleOom(err);
                     }
 
                     align_val.* = null;
@@ -1505,3 +1510,7 @@ fn isAlignProperty(property_id: css.PropertyId) bool {
         else => false,
     };
 }
+
+const bun = @import("bun");
+const std = @import("std");
+const Allocator = std.mem.Allocator;

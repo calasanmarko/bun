@@ -1,21 +1,21 @@
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { REPLACE_ME_WITH_YOUR_REACT_COMPONENT_EXPORT as Component } from "./REPLACE_ME_WITH_YOUR_APP_BASE_NAME";
-import { StrictMode } from "react";
 // Optionally: import your app's CSS
 // import "./styles.css";
 
-function mount(root: HTMLElement) {
-  createRoot(root).render(
-    <StrictMode>
-      <Component />
-    </StrictMode>,
-  );
-}
+const elem = document.getElementById("root")!;
+const app = (
+  <StrictMode>
+    <Component />
+  </StrictMode>
+);
 
-if (document.readyState !== "loading") {
-  mount(document.getElementById("root"));
+if (import.meta.hot) {
+  // With hot module reloading, `import.meta.hot.data` is persisted.
+  const root = (import.meta.hot.data.root ??= createRoot(elem));
+  root.render(app);
 } else {
-  document.addEventListener("DOMContentLoaded", () => {
-    mount(document.getElementById("root"));
-  });
+  // The hot module reloading API is not available in production.
+  createRoot(elem).render(app);
 }

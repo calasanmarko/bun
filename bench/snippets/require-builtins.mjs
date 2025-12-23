@@ -8,13 +8,13 @@ for (let builtin of builtinModules) {
     path,
     `
 const builtin = ${JSON.stringify(builtin)};
-const now = require("perf_hooks").performance.now();
+const now = performance.now();
 require(builtin);
-const end = require("perf_hooks").performance.now();
-process.stdout.write(JSON.stringify({builtin, time: end - now}) + "\\n");
+const end = performance.now();
+process.stdout.write(JSON.stringify({ builtin, time: end - now }) + "\\n");
   `,
   );
-  const result = spawnSync(typeof Bun !== "undefined" ? "bun" : "node", [path], {
+  spawnSync(process.execPath, [path], {
     stdio: ["inherit", "inherit", "inherit"],
     env: {
       ...process.env,

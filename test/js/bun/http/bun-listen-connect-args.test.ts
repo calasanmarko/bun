@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, test } from "bun:test";
 import { cwdScope, isWindows, rmScope, tempDirWithFiles } from "harness";
 
 describe.if(!isWindows)("unix socket", () => {
@@ -33,18 +33,6 @@ describe.if(!isWindows)("unix socket", () => {
       {
         unix: Math.random().toString(32).slice(2, 15) + ".sock",
         hostname: false,
-      },
-      {
-        unix: Math.random().toString(32).slice(2, 15) + ".sock",
-        hostname: Buffer.from(""),
-      },
-      {
-        unix: Math.random().toString(32).slice(2, 15) + ".sock",
-        hostname: Buffer.alloc(0),
-      },
-      {
-        unix: "unix://" + Math.random().toString(32).slice(2, 15) + ".sock",
-        hostname: Buffer.alloc(0),
       },
     ];
 

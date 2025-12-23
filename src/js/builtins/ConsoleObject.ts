@@ -15,7 +15,7 @@ export function asyncIterator(this: Console) {
 
   async function* ConsoleAsyncIterator() {
     var reader = stream.getReader();
-    var deferredError;
+    var deferredError: Error | undefined;
     try {
       if (i !== -1) {
         last = i + 1;
@@ -99,13 +99,14 @@ export function asyncIterator(this: Console) {
         actualChunk = undefined!;
       }
     } catch (e) {
-      deferredError = e;
+      deferredError = e as Error;
     } finally {
       reader.releaseLock();
+    }
 
-      if (deferredError) {
-        throw deferredError;
-      }
+    if (deferredError) {
+      // eslint-disable-next-line no-throw-literal
+      throw deferredError;
     }
   }
 
@@ -155,7 +156,6 @@ export function createConsoleConstructor(console: typeof globalThis.console) {
   const StringPrototypeSplit = String.prototype.split;
   const NumberPrototypeToFixed = Number.prototype.toFixed;
   const StringPrototypeNormalize = String.prototype.normalize;
-  const StringPrototypeCodePointAt = String.prototype.codePointAt;
   const ArrayPrototypeMap = Array.prototype.map;
   const ArrayPrototypeJoin = Array.prototype.join;
   const ArrayPrototypePush = Array.prototype.push;
@@ -266,13 +266,11 @@ export function createConsoleConstructor(console: typeof globalThis.console) {
   const kUseStderr = Symbol("kUseStderr");
 
   const optionsMap = new WeakMap<any, any>();
-  function Console(this: any, options /* or: stdout, stderr, ignoreErrors = true */) {
+  function Console(this: any, options /* or: stdout, stderr, ignoreErrors = true */): void {
     // We have to test new.target here to see if this function is called
     // with new, because we need to define a custom instanceof to accommodate
     // the global console.
-    if (new.target === undefined) {
-      return Reflect.construct(Console, arguments);
-    }
+    if (new.target === undefined) return new Console(...arguments);
 
     if (!options || typeof options.write === "function") {
       options = {
@@ -709,7 +707,7 @@ export function createConsoleConstructor(console: typeof globalThis.console) {
         return final([iterKey, valuesKey], [getIndexArray(length), values]);
       }
 
-      const map = { __proto__: null };
+      const map = Object.create(null);
       let hasPrimitives = false;
       const valuesKeyArray: any = [];
       const indexKeyArray = Object.keys(tabularData);

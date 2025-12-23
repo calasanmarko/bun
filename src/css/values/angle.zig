@@ -1,8 +1,5 @@
-const std = @import("std");
-const bun = @import("root").bun;
 pub const css = @import("../css_parser.zig");
 const Result = css.Result;
-const ArrayList = std.ArrayListUnmanaged;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
 const CSSNumber = css.css_values.number.CSSNumber;
@@ -78,7 +75,7 @@ pub const Angle = union(Tag) {
         return Angle.parseInternal(input, true);
     }
 
-    pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
         const value, const unit = switch (this.*) {
             .deg => |val| .{ val, "deg" },
             .grad => |val| .{ val, "grad" },
@@ -86,24 +83,24 @@ pub const Angle = union(Tag) {
                 const deg = this.toDegrees();
 
                 // We print 5 digits of precision by default.
-                // Switch to degrees if there are an even number of them.
-                if (css.fract(std.math.round(deg * 100000.0)) == 0) {
-                    break :brk .{ val, "deg" };
+                // Switch to degrees if length is smaller than rad.
+                if (css.f32_length_with_5_digits(deg) < css.f32_length_with_5_digits(val)) {
+                    break :brk .{ deg, "deg" };
                 } else {
                     break :brk .{ val, "rad" };
                 }
             },
             .turn => |val| .{ val, "turn" },
         };
-        css.serializer.serializeDimension(value, unit, W, dest) catch return dest.addFmtError();
+        css.serializer.serializeDimension(value, unit, dest) catch return dest.addFmtError();
     }
 
-    pub fn toCssWithUnitlessZero(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCssWithUnitlessZero(this: *const This, dest: *Printer) PrintErr!void {
         if (this.isZero()) {
             const v: f32 = 0.0;
-            try CSSNumberFns.toCss(&v, W, dest);
+            try CSSNumberFns.toCss(&v, dest);
         } else {
-            return this.toCss(W, dest);
+            return this.toCss(dest);
         }
     }
 
@@ -304,3 +301,6 @@ pub const Angle = union(Tag) {
 /// A CSS [`<angle-percentage>`](https://www.w3.org/TR/css-values-4/#typedef-angle-percentage) value.
 /// May be specified as either an angle or a percentage that resolves to an angle.
 pub const AnglePercentage = css.css_values.percentage.DimensionPercentage(Angle);
+
+const bun = @import("bun");
+const std = @import("std");

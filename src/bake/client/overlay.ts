@@ -23,7 +23,7 @@ type FailureOwner = number;
 
 /**
  * Build errors come from SerializedFailure objects on the server, with the key
- * being the the SerializedFailure.Owner bitcast to an i32.
+ * being the SerializedFailure.Owner bitcast to an i32.
  */
 const buildErrors = new Map<FailureOwner, DeserializedFailure>();
 /** Runtime errors are stored in a list and are cleared before any hot update. */
@@ -125,6 +125,7 @@ interface CodePreview {
 
 interface RemappedFrame extends Frame {}
 
+declare const OVERLAY_CSS: string;
 /**
  * Initial mount is done lazily. The modal starts invisible, controlled
  * by `setModalVisible`.
@@ -139,12 +140,12 @@ function mountModal() {
       "left:0!important;" +
       "width:100%!important;" +
       "height:100%!important;" +
-      "background:#8883!important" +
+      "background:#8883!important;" +
       "z-index:2147483647!important",
   });
   const shadow = domShadowRoot.attachShadow({ mode: "open" });
   const sheet = new CSSStyleSheet();
-  sheet.replace(css("client/overlay.css", IS_BUN_DEVELOPMENT));
+  sheet.replace(OVERLAY_CSS);
   shadow.adoptedStyleSheets = [sheet];
 
   const root = elem("div", { class: "root" }, [
@@ -250,8 +251,8 @@ export async function onRuntimeError(err: any, fatal = false, async = false) {
     writer.stringWithLength(browserUrl);
     writer.u32(parsed.length);
     for (const frame of parsed) {
-      writer.u32(frame.line ?? 0);
-      writer.u32(frame.col ?? 0);
+      writer.i32(frame.line ?? 0);
+      writer.i32(frame.col ?? 0);
       writer.stringWithLength(frame.fn ?? "");
       const fileName = frame.file;
       if (fileName) {
@@ -314,7 +315,6 @@ export async function onRuntimeError(err: any, fatal = false, async = false) {
         async,
         code,
       });
-      console.log(code);
     } catch (e) {
       console.error("Failed to remap error", e);
       runtimeErrors.push({
@@ -514,7 +514,11 @@ function updateRuntimeErrorOverlay(err: RuntimeError) {
   }
 
   dom.appendChild(
-    elem("div", { class: "r-error-trace" }, [...trace.map(frame => renderTraceFrame(frame, "trace-frame"))]),
+    elem(
+      "div",
+      { class: "r-error-trace" },
+      trace.map(frame => renderTraceFrame(frame, "trace-frame")),
+    ),
   );
   domErrorContent.appendChild(dom);
 }
@@ -667,7 +671,7 @@ declare global {
 }
 
 import { BundlerMessageLevel } from "../enums";
-import { css } from "../macros" with { type: "macro" };
+import { DataViewReader, DataViewWriter } from "./data-view";
 import {
   BundlerMessage,
   BundlerMessageLocation,
@@ -675,6 +679,5 @@ import {
   decodeSerializedError,
   type DeserializedFailure,
 } from "./error-serialization";
-import { DataViewReader, DataViewWriter } from "./data-view";
-import { parseStackTrace, type Frame } from "./stack-trace";
 import { syntaxHighlight } from "./JavaScriptSyntaxHighlighter";
+import { parseStackTrace, type Frame } from "./stack-trace";

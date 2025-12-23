@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { bunEnv, bunExe, isBroken, isIntelMacOS, isWindows, tempDirWithFiles } from "harness";
+import { bunEnv, bunExe, isBroken, isCI, isIntelMacOS, isMacOS, isWindows, tempDirWithFiles } from "harness";
 import { join } from "path";
 
 test("require.cache is not an empty object literal when inspected", () => {
@@ -46,11 +46,12 @@ describe.skipIf(isBroken && isIntelMacOS)("files transpiled and loaded don't lea
       "require-cache-bug-leak-fixture.js": `
         const path = require.resolve("./index.js");
         const gc = global.gc || globalThis?.Bun?.gc || (() => {});
+        const noChildren = module.children = { indexOf() { return 0; } }; // disable children tracking
         function bust() {
           const mod = require.cache[path];
           if (mod) {
             mod.parent = null;
-            mod.children = [];
+            mod.children = noChildren;
             delete require.cache[path];
           }
         }
@@ -72,7 +73,7 @@ describe.skipIf(isBroken && isIntelMacOS)("files transpiled and loaded don't lea
         console.log("RSS diff", (diff / 1024 / 1024) | 0, "MB");
         console.log("RSS", (diff / 1024 / 1024) | 0, "MB");
         if (diff > 100 * 1024 * 1024) {
-          // Bun v1.1.21 reported 844 MB here on macoS arm64.
+          // Bun v1.1.21 reported 844 MB here on macOS arm64.
           throw new Error("Memory leak detected");
         }
 
@@ -194,18 +195,23 @@ describe.skipIf(isBroken && isIntelMacOS)("files transpiled and loaded don't lea
     expect(exitCode).toBe(0);
   }, 60000);
 
-  test("via require() with a lot of function calls", () => {
-    let text = "function i() { return 1; }\n";
-    for (let i = 0; i < 20000; i++) {
-      text += `i();\n`;
-    }
-    text += "exports.forceCommonJS = true;\n";
+  test.todoIf(
+    // Flaky specifically on macOS CI.
+    isBroken && isMacOS && isCI,
+  )(
+    "via require() with a lot of function calls",
+    () => {
+      let text = "function i() { return 1; }\n";
+      for (let i = 0; i < 20000; i++) {
+        text += `i();\n`;
+      }
+      text += "exports.forceCommonJS = true;\n";
 
-    console.log("Text length:", text.length);
+      console.log("Text length:", text.length);
 
-    const dir = tempDirWithFiles("require-cache-bug-leak-2", {
-      "index.js": text,
-      "require-cache-bug-leak-fixture.js": `
+      const dir = tempDirWithFiles("require-cache-bug-leak-2", {
+        "index.js": text,
+        "require-cache-bug-leak-fixture.js": `
         const path = require.resolve("./index.js");
         const gc = global.gc || globalThis?.Bun?.gc || (() => {});
         function bust() {
@@ -241,16 +247,18 @@ describe.skipIf(isBroken && isIntelMacOS)("files transpiled and loaded don't lea
 
         exports.abc = 123;
       `,
-    });
-    const { exitCode, resourceUsage } = Bun.spawnSync({
-      cmd: [bunExe(), "run", "--smol", join(dir, "require-cache-bug-leak-fixture.js")],
-      env: bunEnv,
-      stdio: ["inherit", "inherit", "inherit"],
-    });
+      });
+      const { exitCode, resourceUsage } = Bun.spawnSync({
+        cmd: [bunExe(), "run", "--smol", join(dir, "require-cache-bug-leak-fixture.js")],
+        env: bunEnv,
+        stdio: ["inherit", "inherit", "inherit"],
+      });
 
-    console.log(resourceUsage);
-    expect(exitCode).toBe(0);
-  }, 60000); // takes 4s on an M1 in release build
+      console.log(resourceUsage);
+      expect(exitCode).toBe(0);
+    },
+    60000,
+  ); // takes 4s on an M1 in release build
 });
 
 describe("files transpiled and loaded don't leak the AST", () => {

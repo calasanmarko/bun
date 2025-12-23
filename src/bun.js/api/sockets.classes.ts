@@ -21,6 +21,7 @@ function generate(ssl) {
         fn: "pauseFromJS",
         length: 0,
       },
+
       getTLSFinishedMessage: {
         fn: "getTLSFinishedMessage",
         length: 0,
@@ -45,6 +46,10 @@ function generate(ssl) {
         fn: "disableRenegotiation",
         length: 0,
       },
+      isSessionReused: {
+        fn: "isSessionReused",
+        length: 0,
+      },
       setVerifyMode: {
         fn: "setVerifyMode",
         length: 2,
@@ -55,7 +60,7 @@ function generate(ssl) {
       },
       setSession: {
         fn: "setSession",
-        length: 0,
+        length: 1,
       },
       getTLSTicket: {
         fn: "getTLSTicket",
@@ -91,6 +96,9 @@ function generate(ssl) {
       bytesWritten: {
         getter: "getBytesWritten",
       },
+      fd: {
+        getter: "getFD",
+      },
       setNoDelay: {
         fn: "setNoDelay",
         length: 1,
@@ -116,7 +124,6 @@ function generate(ssl) {
         length: 0,
       },
 
-      //   },
       listener: {
         getter: "getListener",
       },
@@ -140,6 +147,10 @@ function generate(ssl) {
         fn: "shutdown",
         length: 1,
       },
+      close: {
+        fn: "close",
+        length: 0,
+      },
 
       ref: {
         fn: "jsRef",
@@ -150,9 +161,19 @@ function generate(ssl) {
         length: 0,
       },
 
+      localFamily: {
+        getter: "getLocalFamily",
+        cache: true,
+      },
+      localAddress: {
+        getter: "getLocalAddress",
+        cache: true,
+      },
       localPort: {
         getter: "getLocalPort",
+        cache: true,
       },
+
       //   cork: {
       //     fn: "cork",
       //     length: 1,
@@ -170,9 +191,16 @@ function generate(ssl) {
       //   getter: "getTopics",
       // },
 
+      remoteFamily: {
+        getter: "getRemoteFamily",
+        cache: true,
+      },
       remoteAddress: {
         getter: "getRemoteAddress",
         cache: true,
+      },
+      remotePort: {
+        getter: "getRemotePort",
       },
 
       reload: {
@@ -243,7 +271,9 @@ export default [
         fn: "unref",
         length: 0,
       },
-
+      fd: {
+        getter: "getFD",
+      },
       port: {
         getter: "getPort",
       },
@@ -261,10 +291,14 @@ export default [
         getter: "getHostname",
         cache: true,
       },
-
       data: {
         getter: "getData",
         setter: "setData",
+      },
+
+      getsockname: {
+        fn: "getsockname",
+        length: 1,
       },
     },
     finalize: true,
@@ -278,7 +312,7 @@ export default [
     JSType: "0b11101110",
     finalize: true,
     construct: true,
-    hasPendingActivity: true,
+    values: ["on_data", "on_drain", "on_error"],
     proto: {
       send: {
         fn: "send",
@@ -369,5 +403,100 @@ export default [
       },
     },
     klass: {},
+  }),
+  define({
+    name: "SocketAddress",
+    construct: true,
+    call: false,
+    finalize: true,
+    estimatedSize: true,
+    JSType: "0b11101110",
+    klass: {
+      parse: {
+        fn: "parse",
+        length: 1,
+        enumerable: false,
+        configurable: true,
+      },
+      isSocketAddress: {
+        fn: "isSocketAddress",
+        length: 1,
+        enumerable: false,
+        configurable: true,
+      },
+    },
+    proto: {
+      address: {
+        getter: "getAddress",
+        enumerable: false,
+        configurable: true,
+        cache: true,
+      },
+      port: {
+        getter: "getPort",
+        enumerable: false,
+        configurable: true,
+      },
+      family: {
+        getter: "getFamily",
+        enumerable: false,
+        configurable: true,
+        cache: true,
+      },
+      addrfamily: {
+        getter: "getAddrFamily",
+        enumerable: false,
+        configurable: false,
+      },
+      flowlabel: {
+        getter: "getFlowLabel",
+        enumerable: false,
+        configurable: true,
+      },
+      toJSON: {
+        fn: "toJSON",
+        length: 0,
+        this: true,
+        enumerable: false,
+        configurable: true,
+      },
+    },
+  }),
+  define({
+    name: "BlockList",
+    construct: true,
+    call: false,
+    finalize: true,
+    estimatedSize: true,
+    // inspectCustom: true,
+    structuredClone: { transferable: false, tag: 251, storable: false },
+    JSType: "0b11101110",
+    klass: {
+      isBlockList: {
+        fn: "isBlockList",
+        length: 1,
+      },
+    },
+    proto: {
+      addAddress: {
+        fn: "addAddress",
+        length: 1,
+      },
+      addRange: {
+        fn: "addRange",
+        length: 2,
+      },
+      addSubnet: {
+        fn: "addSubnet",
+        length: 2,
+      },
+      check: {
+        fn: "check",
+        length: 1,
+      },
+      rules: {
+        getter: "rules",
+      },
+    },
   }),
 ];

@@ -6,9 +6,10 @@
 // This is embedded in `DevServer.sendSerializedFailures`. SSR is
 // left unused for simplicity; a flash of unstyled content is
 // stopped by the fact this script runs synchronously.
-import { decodeAndAppendServerError, onServerErrorPayload, updateErrorOverlay } from "./client/overlay";
 import { DataViewReader } from "./client/data-view";
+import { decodeAndAppendServerError, onServerErrorPayload, updateErrorOverlay } from "./client/overlay";
 import { initWebSocket } from "./client/websocket";
+import "./debug";
 import { MessageId } from "./generated";
 
 /** Injected by DevServer */
@@ -29,21 +30,18 @@ declare const error: Uint8Array<ArrayBuffer>;
 
 let firstVersionPacket = true;
 
-const ws = initWebSocket(
-  {
-    [MessageId.version](dv) {
-      if (firstVersionPacket) {
-        firstVersionPacket = false;
-      } else {
-        // On re-connection, the server may have restarted. The route that was
-        // requested could be in unqueued state. A reload is the only way to
-        // ensure this bundle is enqueued.
-        location.reload();
-      }
-      ws.send("se"); // IncomingMessageId.subscribe with errors
-    },
-
-    [MessageId.errors]: onServerErrorPayload,
+const ws = initWebSocket({
+  [MessageId.version](dv) {
+    if (firstVersionPacket) {
+      firstVersionPacket = false;
+    } else {
+      // On re-connection, the server may have restarted. The route that was
+      // requested could be in unqueued state. A reload is the only way to
+      // ensure this bundle is enqueued.
+      location.reload();
+    }
+    ws.send("se"); // IncomingMessageId.subscribe with errors
   },
-  { displayMessage: "Live-reloading socket" },
-);
+
+  [MessageId.errors]: onServerErrorPayload,
+});

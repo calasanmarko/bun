@@ -1,20 +1,7 @@
 // @link "../deps/libarchive.a"
 
 pub const lib = @import("./libarchive-bindings.zig");
-const bun = @import("root").bun;
-const string = bun.string;
-const Output = bun.Output;
-const Global = bun.Global;
-const Environment = bun.Environment;
-const strings = bun.strings;
-const MutableString = bun.MutableString;
-const FileDescriptorType = bun.FileDescriptor;
-const stringZ = bun.stringZ;
-const default_allocator = bun.default_allocator;
-const C = bun.C;
-const std = @import("std");
 const Archive = lib.Archive;
-const JSC = bun.JSC;
 pub const Seek = enum(c_int) {
     set = std.posix.SEEK_SET,
     current = std.posix.SEEK_CUR,
@@ -89,7 +76,7 @@ pub const BufferReadStream = struct {
     pub fn archive_close_callback(
         _: *Archive,
         _: *anyopaque,
-    ) callconv(.C) c_int {
+    ) callconv(.c) c_int {
         return 0;
     }
 
@@ -97,7 +84,7 @@ pub const BufferReadStream = struct {
         _: *Archive,
         ctx_: *anyopaque,
         buffer: [*c]*const anyopaque,
-    ) callconv(.C) lib.la_ssize_t {
+    ) callconv(.c) lib.la_ssize_t {
         var this = fromCtx(ctx_);
         const remaining = this.bufLeft();
         if (remaining.len == 0) return 0;
@@ -112,7 +99,7 @@ pub const BufferReadStream = struct {
         _: *Archive,
         ctx_: *anyopaque,
         offset: lib.la_int64_t,
-    ) callconv(.C) lib.la_int64_t {
+    ) callconv(.c) lib.la_int64_t {
         var this = fromCtx(ctx_);
 
         const buflen = @as(isize, @intCast(this.buf.len));
@@ -129,7 +116,7 @@ pub const BufferReadStream = struct {
         ctx_: *anyopaque,
         offset: lib.la_int64_t,
         whence: c_int,
-    ) callconv(.C) lib.la_int64_t {
+    ) callconv(.c) lib.la_int64_t {
         var this = fromCtx(ctx_);
 
         const buflen = @as(isize, @intCast(this.buf.len));
@@ -159,20 +146,20 @@ pub const BufferReadStream = struct {
     //     ctx_: *anyopaque,
     //     buffer: *const anyopaque,
     //     len: usize,
-    // ) callconv(.C) lib.la_ssize_t {
+    // ) callconv(.c) lib.la_ssize_t {
     //     var this = fromCtx(ctx_);
     // }
 
     // pub fn archive_close_callback(
     //     archive: *Archive,
     //     ctx_: *anyopaque,
-    // ) callconv(.C) c_int {
+    // ) callconv(.c) c_int {
     //     var this = fromCtx(ctx_);
     // }
     // pub fn archive_free_callback(
     //     archive: *Archive,
     //     ctx_: *anyopaque,
-    // ) callconv(.C) c_int {
+    // ) callconv(.c) c_int {
     //     var this = fromCtx(ctx_);
     // }
 
@@ -180,13 +167,11 @@ pub const BufferReadStream = struct {
     //     archive: *Archive,
     //     ctx1: *anyopaque,
     //     ctx2: *anyopaque,
-    // ) callconv(.C) c_int {
+    // ) callconv(.c) c_int {
     //     var this = fromCtx(ctx1);
     //     var that = fromCtx(ctx2);
     // }
 };
-
-const Kind = std.fs.File.Kind;
 
 pub const Archiver = struct {
     // impl: *lib.archive = undefined,
@@ -213,12 +198,13 @@ pub const Archiver = struct {
         contents: MutableString,
         filename_hash: u64 = 0,
         found: bool = false,
-        fd: FileDescriptorType = .zero,
+        fd: FileDescriptorType,
+
         pub fn init(filepath: bun.OSPathSlice, estimated_size: usize, allocator: std.mem.Allocator) !Plucker {
             return Plucker{
                 .contents = try MutableString.init(allocator, estimated_size),
                 .filename_hash = bun.hash(std.mem.sliceAsBytes(filepath)),
-                .fd = .zero,
+                .fd = .invalid,
                 .found = false,
             };
         }
@@ -358,8 +344,8 @@ pub const Archiver = struct {
                     if (comptime ContextType != void and @hasDecl(std.meta.Child(ContextType), "onFirstDirectoryName")) {
                         if (appender.needs_first_dirname) {
                             if (comptime Environment.isWindows) {
-                                const list = std.ArrayList(u8).init(default_allocator);
-                                var result = try strings.toUTF8ListWithType(list, []const u16, pathname[0..pathname.len]);
+                                const list = std.array_list.Managed(u8).init(default_allocator);
+                                var result = try strings.toUTF8ListWithType(list, pathname[0..pathname.len]);
                                 // onFirstDirectoryName copies the contents of pathname to another buffer, safe to free
                                 defer result.deinit();
                                 appender.onFirstDirectoryName(strings.withoutTrailingSlash(result.items));
@@ -369,7 +355,7 @@ pub const Archiver = struct {
                         }
                     }
 
-                    const kind = C.kindFromMode(entry.filetype());
+                    const kind = bun.sys.kindFromMode(entry.filetype());
 
                     if (options.npm) {
                         // - ignore entries other than files (`true` can only be returned if type is file)
@@ -405,9 +391,9 @@ pub const Archiver = struct {
                             remain = remain[2..];
                         }
 
-                        for (remain) |*c| {
-                            switch (c.*) {
-                                '|', '<', '>', '?', ':' => c.* += 0xf000,
+                        for (remain) |*char| {
+                            switch (char.*) {
+                                '|', '<', '>', '?', ':' => char.* += 0xf000,
                                 else => {},
                             }
                         }
@@ -416,7 +402,7 @@ pub const Archiver = struct {
                     const path_slice: bun.OSPathSlice = path.ptr[0..path.len];
 
                     if (options.log) {
-                        Output.prettyln(" {}", .{bun.fmt.fmtOSPath(path_slice, .{})});
+                        Output.prettyln(" {f}", .{bun.fmt.fmtOSPath(path_slice, .{})});
                     }
 
                     count += 1;
@@ -437,7 +423,7 @@ pub const Archiver = struct {
                             if (comptime Environment.isWindows) {
                                 try bun.MakePath.makePath(u16, dir, path);
                             } else {
-                                std.posix.mkdiratZ(dir_fd, pathname, @as(u32, @intCast(mode))) catch |err| {
+                                std.posix.mkdiratZ(dir_fd, pathname, @intCast(mode)) catch |err| {
                                     // It's possible for some tarballs to return a directory twice, with and
                                     // without `./` in the beginning. So if it already exists, continue to the
                                     // next entry.
@@ -450,11 +436,11 @@ pub const Archiver = struct {
                         .sym_link => {
                             const link_target = entry.symlink();
                             if (Environment.isPosix) {
-                                bun.sys.symlinkat(link_target, bun.toFD(dir_fd), path).unwrap() catch |err| brk: {
+                                bun.sys.symlinkat(link_target, .fromNative(dir_fd), path).unwrap() catch |err| brk: {
                                     switch (err) {
                                         error.EPERM, error.ENOENT => {
                                             dir.makePath(std.fs.path.dirname(path_slice) orelse return err) catch {};
-                                            break :brk try bun.sys.symlinkat(link_target, bun.toFD(dir_fd), path).unwrap();
+                                            break :brk try bun.sys.symlinkat(link_target, .fromNative(dir_fd), path).unwrap();
                                         },
                                         else => return err,
                                     }
@@ -470,41 +456,39 @@ pub const Archiver = struct {
                             // we simplify and turn it into `entry.mode || 0o666` because we aren't accepting a umask or fmask option.
                             const mode: bun.Mode = if (comptime Environment.isWindows) 0 else @intCast(entry.perm() | 0o666);
 
-                            const file_handle_native = brk: {
-                                if (Environment.isWindows) {
-                                    const flags = bun.O.WRONLY | bun.O.CREAT | bun.O.TRUNC;
-                                    switch (bun.sys.openatWindows(bun.toFD(dir_fd), path, flags, 0)) {
-                                        .result => |fd| break :brk fd,
-                                        .err => |e| switch (e.errno) {
-                                            @intFromEnum(bun.C.E.PERM), @intFromEnum(bun.C.E.NOENT) => {
-                                                bun.MakePath.makePath(u16, dir, bun.Dirname.dirname(u16, path_slice) orelse return bun.errnoToZigErr(e.errno)) catch {};
-                                                break :brk try bun.sys.openatWindows(bun.toFD(dir_fd), path, flags, 0).unwrap();
-                                            },
-                                            else => {
-                                                return bun.errnoToZigErr(e.errno);
-                                            },
+                            const flags = bun.O.WRONLY | bun.O.CREAT | bun.O.TRUNC;
+                            const file_handle_native: bun.FD = if (Environment.isWindows)
+                                switch (bun.sys.openatWindows(.fromNative(dir_fd), path, flags, 0)) {
+                                    .result => |fd| fd,
+                                    .err => |e| switch (e.errno) {
+                                        @intFromEnum(bun.sys.E.PERM),
+                                        @intFromEnum(bun.sys.E.NOENT),
+                                        => brk: {
+                                            bun.MakePath.makePath(u16, dir, bun.Dirname.dirname(u16, path_slice) orelse return bun.errnoToZigErr(e.errno)) catch {};
+                                            break :brk try bun.sys.openatWindows(.fromNative(dir_fd), path, flags, 0).unwrap();
                                         },
-                                    }
-                                } else {
-                                    break :brk (dir.createFileZ(path, .{ .truncate = true, .mode = mode }) catch |err| {
-                                        switch (err) {
-                                            error.AccessDenied, error.FileNotFound => {
-                                                dir.makePath(std.fs.path.dirname(path_slice) orelse return err) catch {};
-                                                break :brk (try dir.createFileZ(path, .{
-                                                    .truncate = true,
-                                                    .mode = mode,
-                                                })).handle;
-                                            },
-                                            else => {
-                                                return err;
-                                            },
-                                        }
-                                    }).handle;
+                                        else => return bun.errnoToZigErr(e.errno),
+                                    },
                                 }
-                            };
+                            else
+                                .fromStdFile(dir.createFileZ(path, .{
+                                    .truncate = true,
+                                    .mode = mode,
+                                }) catch |err|
+                                    switch (err) {
+                                        error.AccessDenied, error.FileNotFound => brk: {
+                                            dir.makePath(std.fs.path.dirname(path_slice) orelse return err) catch {};
+                                            break :brk try dir.createFileZ(path, .{
+                                                .truncate = true,
+                                                .mode = mode,
+                                            });
+                                        },
+                                        else => return err,
+                                    });
+
                             const file_handle = brk: {
-                                errdefer _ = bun.sys.close(file_handle_native);
-                                break :brk try bun.toLibUVOwnedFD(file_handle_native);
+                                errdefer _ = file_handle_native.close();
+                                break :brk try file_handle_native.makeLibUVOwned();
                             };
 
                             var plucked_file = false;
@@ -522,7 +506,7 @@ pub const Archiver = struct {
                                 // But this approach does not actually solve the problem, it just
                                 // defers the close to a different thread. And since we are already
                                 // on a worker thread, that doesn't help us.
-                                _ = bun.sys.close(file_handle);
+                                file_handle.close();
                             };
 
                             const size: usize = @intCast(@max(entry.size(), 0));
@@ -557,7 +541,7 @@ pub const Archiver = struct {
                                 // #define    MAX_WRITE    (1024 * 1024)
                                 if (comptime Environment.isLinux) {
                                     if (size > 1_000_000) {
-                                        C.preallocate_file(
+                                        bun.sys.preallocate_file(
                                             file_handle.cast(),
                                             0,
                                             @intCast(size),
@@ -567,12 +551,12 @@ pub const Archiver = struct {
 
                                 var retries_remaining: u8 = 5;
                                 possibly_retry: while (retries_remaining != 0) : (retries_remaining -= 1) {
-                                    switch (archive.readDataIntoFd(bun.uvfdcast(file_handle))) {
+                                    switch (archive.readDataIntoFd(file_handle.uv())) {
                                         .eof => break :loop,
                                         .ok => break :possibly_retry,
                                         .retry => {
                                             if (options.log) {
-                                                Output.err("libarchive error", "extracting {}, retry {d} / {d}", .{
+                                                Output.err("libarchive error", "extracting {f}, retry {d} / {d}", .{
                                                     bun.fmt.fmtOSPath(path_slice, .{}),
                                                     retries_remaining,
                                                     5,
@@ -582,7 +566,7 @@ pub const Archiver = struct {
                                         else => {
                                             if (options.log) {
                                                 const archive_error = bun.sliceTo(lib.Archive.errorString(@ptrCast(archive)), 0);
-                                                Output.err("libarchive error", "extracting {}: {s}", .{
+                                                Output.err("libarchive error", "extracting {f}: {s}", .{
                                                     bun.fmt.fmtOSPath(path_slice, .{}),
                                                     archive_error,
                                                 });
@@ -627,3 +611,16 @@ pub const Archiver = struct {
         return try extractToDir(file_buffer, dir, ctx, FilePathAppender, appender, options);
     }
 };
+
+const string = []const u8;
+
+const std = @import("std");
+
+const bun = @import("bun");
+const Environment = bun.Environment;
+const FileDescriptorType = bun.FileDescriptor;
+const MutableString = bun.MutableString;
+const Output = bun.Output;
+const c = bun.c;
+const default_allocator = bun.default_allocator;
+const strings = bun.strings;

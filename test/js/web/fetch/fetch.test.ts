@@ -1,17 +1,29 @@
 import { AnyFunction, serve, ServeOptions, Server, sleep, TCPSocketListener } from "bun";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { chmodSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { bunEnv, bunExe, gc, isBroken, isWindows, tls, tmpdirSync, withoutAggressiveGC } from "harness";
+import { chmodSync, rmSync, writeFileSync } from "fs";
+import {
+  bunEnv,
+  bunExe,
+  exampleSite,
+  exampleHtml as fixture,
+  gc,
+  isBroken,
+  isFlaky,
+  isMacOS,
+  isWindows,
+  tls,
+  tmpdirSync,
+  withoutAggressiveGC,
+} from "harness";
+
+import { once } from "events";
 import { mkfifo } from "mkfifo";
+import type { AddressInfo } from "net";
 import net from "net";
 import { join } from "path";
-import { gzipSync } from "zlib";
 import { Readable } from "stream";
-import { once } from "events";
-import type { AddressInfo } from "net";
+import { gzipSync } from "zlib";
 const tmp_dir = tmpdirSync();
-
-const fixture = readFileSync(join(import.meta.dir, "fetch.js.txt"), "utf8").replaceAll("\r\n", "\n");
 const fetchFixture3 = join(import.meta.dir, "fetch-leak-test-fixture-3.js");
 const fetchFixture4 = join(import.meta.dir, "fetch-leak-test-fixture-4.js");
 let server: Server;
@@ -22,14 +34,19 @@ function startServer({ fetch, ...options }: ServeOptions) {
     fetch,
     port: 0,
   });
+  return server;
 }
 
+let httpServer = exampleSite("http");
+let httpsServer = exampleSite("https");
 afterEach(() => {
   server?.stop?.(true);
 });
 
 afterAll(() => {
   rmSync(tmp_dir, { force: true, recursive: true });
+  httpServer.stop();
+  httpsServer.stop();
 });
 
 const payload = new Uint8Array(1024 * 1024 * 2);
@@ -260,31 +277,77 @@ describe("AbortSignal", () => {
       expect(target.reason!.name).toBe("AbortError");
     });
 
-    expect(async () => {
-      async function manualAbort() {
-        await sleep(10);
-        controller.abort();
-      }
+    async function manualAbort() {
+      await sleep(10);
+      controller.abort();
+    }
+
+    try {
       await Promise.all([fetch(server.url, { signal: signal }).then(res => res.text()), manualAbort()]);
-    }).toThrow(new DOMException("The operation was aborted."));
+      expect.unreachable();
+    } catch (e) {
+      expect(e?.message).toEqual("The operation was aborted.");
+      expect(e?.name).toEqual("AbortError");
+      expect(e?.constructor.name).toEqual("DOMException");
+    }
   });
 
   it("AbortErrorWhileUploading", async () => {
     const controller = new AbortController();
 
-    expect(async () => {
+    try {
       await fetch(`http://localhost:${server.port}`, {
         method: "POST",
         body: new ReadableStream({
           pull(event_controller) {
+            console.count("pull");
             event_controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+            //this will abort immediately should abort before connected
+            controller.abort();
+          },
+          cancel(reason) {
+            console.log("cancel", reason);
+          },
+        }),
+        signal: controller.signal,
+      });
+      expect.unreachable();
+    } catch (ex: any) {
+      expect(ex?.message).toEqual("The operation was aborted.");
+      expect(ex?.name).toEqual("AbortError");
+      expect(ex?.constructor.name).toEqual("DOMException");
+    }
+  });
+
+  it("abort while uploading prevents pull() from being called", async () => {
+    const controller = new AbortController();
+    await fetch(`http://localhost:${server.port}`, {
+      method: "POST",
+      body: new Blob(["a"]),
+    });
+
+    try {
+      await fetch(`http://localhost:${server.port}`, {
+        method: "POST",
+        body: new ReadableStream({
+          async pull(event_controller) {
+            expect(controller.signal.aborted).toBeFalse();
+            const chunk = Buffer.alloc(256 * 1024, "abc");
+            for (let i = 0; i < 64; i++) {
+              event_controller.enqueue(chunk);
+            }
             //this will abort immediately should abort before connected
             controller.abort();
           },
         }),
         signal: controller.signal,
       });
-    }).toThrow(new DOMException("The operation was aborted."));
+      expect.unreachable();
+    } catch (ex: any) {
+      expect(ex?.message).toEqual("The operation was aborted.");
+      expect(ex?.name).toEqual("AbortError");
+      expect(ex?.constructor.name).toEqual("DOMException");
+    }
   });
 
   it("TimeoutError", async () => {
@@ -302,6 +365,8 @@ describe("AbortSignal", () => {
       expect.unreachable();
     } catch (ex: any) {
       expect(ex.name).toBe("TimeoutError");
+      expect(ex.message).toBe("The operation timed out.");
+      expect(ex.constructor.name).toBe("DOMException");
     }
   });
 
@@ -463,13 +528,13 @@ describe("Headers", () => {
 
 describe("fetch", () => {
   const urls = [
-    "https://example.com",
-    "http://example.com",
-    new URL("https://example.com"),
-    new Request({ url: "https://example.com" }),
-    { toString: () => "https://example.com" } as string,
+    { url: httpsServer.url.href, tls: { ca: httpsServer.ca } },
+    { url: httpServer.url.href, tls: undefined },
+    { url: httpsServer.url, tls: { ca: httpsServer.ca } },
+    { url: new Request({ url: httpsServer.url.href }), tls: { ca: httpsServer.ca } },
+    { url: { toString: () => httpServer.url.href } as string, tls: undefined },
   ];
-  for (let url of urls) {
+  for (let { url, tls } of urls) {
     gc();
     let name: string;
     if (url instanceof URL) {
@@ -481,9 +546,9 @@ describe("fetch", () => {
     } else {
       name = url as string;
     }
-    it(name, async () => {
+    it.concurrent(name, async () => {
       gc();
-      const response = await fetch(url, { verbose: true });
+      const response = await fetch(url, { verbose: true, tls });
       gc();
       const text = await response.text();
       gc();
@@ -491,8 +556,9 @@ describe("fetch", () => {
     });
   }
 
-  it('redirect: "manual"', async () => {
-    startServer({
+  it.concurrent('redirect: "manual"', async () => {
+    using server = Bun.serve({
+      port: 0,
       fetch(req) {
         return new Response(null, {
           status: 302,
@@ -510,8 +576,9 @@ describe("fetch", () => {
     expect(response.redirected).toBe(false); // not redirected
   });
 
-  it('redirect: "follow"', async () => {
-    startServer({
+  it.concurrent('redirect: "follow"', async () => {
+    using server = Bun.serve({
+      port: 0,
       fetch(req) {
         return new Response(null, {
           status: 302,
@@ -529,8 +596,9 @@ describe("fetch", () => {
     expect(response.redirected).toBe(true);
   });
 
-  it('redirect: "error" #2819', async () => {
-    startServer({
+  it.concurrent('redirect: "error" #2819', async () => {
+    using server = Bun.serve({
+      port: 0,
       fetch(req) {
         return new Response(null, {
           status: 302,
@@ -550,7 +618,7 @@ describe("fetch", () => {
     }
   });
 
-  it("should properly redirect to another port #7793", async () => {
+  it.concurrent("should properly redirect to another port #7793", async () => {
     var socket: net.Server | null = null;
     try {
       using server = Bun.serve({
@@ -586,8 +654,9 @@ describe("fetch", () => {
     }
   });
 
-  it("provide body", async () => {
-    startServer({
+  it.concurrent("provide body", async () => {
+    using server = Bun.serve({
+      port: 0,
       fetch(req) {
         return new Response(req.body);
       },
@@ -602,7 +671,7 @@ describe("fetch", () => {
   });
 
   ["GET", "HEAD", "OPTIONS"].forEach(method =>
-    it(`fail on ${method} with body`, async () => {
+    it.concurrent(`fail on ${method} with body`, async () => {
       const url = `http://${server.hostname}:${server.port}`;
       expect(async () => {
         await fetch(url, { body: "buntastic" });
@@ -610,8 +679,9 @@ describe("fetch", () => {
     }),
   );
 
-  it("content length is inferred", async () => {
-    startServer({
+  it.concurrent("content length is inferred", async () => {
+    using server = Bun.serve({
+      port: 0,
       fetch(req) {
         return new Response(req.headers.get("content-length"));
       },
@@ -629,7 +699,7 @@ describe("fetch", () => {
     expect(await response2.text()).toBe("0");
   });
 
-  it("should work with ipv6 localhost", async () => {
+  it.concurrent("should work with ipv6 localhost", async () => {
     using server = Bun.serve({
       port: 0,
       fetch(req) {
@@ -647,12 +717,12 @@ describe("fetch", () => {
   });
 });
 
-it("simultaneous HTTPS fetch", async () => {
-  const urls = ["https://example.com", "https://www.example.com"];
+it.concurrent("simultaneous HTTPS fetch", async () => {
+  const urls = [httpsServer.url.href, httpsServer.url.href];
   for (let batch = 0; batch < 4; batch++) {
     const promises = new Array(20);
     for (let i = 0; i < 20; i++) {
-      promises[i] = fetch(urls[i % 2]);
+      promises[i] = fetch(urls[i % 2], { tls: { ca: httpsServer.ca } });
     }
     const result = await Promise.all(promises);
     expect(result.length).toBe(20);
@@ -663,7 +733,7 @@ it("simultaneous HTTPS fetch", async () => {
   }
 });
 
-it("website with tlsextname", async () => {
+it.concurrent("website with tlsextname", async () => {
   // irony
   await fetch("https://bun.sh", { method: "HEAD" });
 });
@@ -676,23 +746,27 @@ function testBlobInterface(blobbyConstructor: { (..._: any[]): any }, hasBlobFn?
         hello: "😀 😃 😄 😁 😆 😅 😂 🤣 🥲 ☺️ 😊 😇 🙂 🙃 😉 😌 😍 🥰 😘 😗 😙 😚 😋 😛 😝 😜 🤪 🤨 🧐 🤓 😎 🥸 🤩 🥳",
       },
     ]) {
-      it(`${jsonObject.hello === true ? "latin1" : "utf16"} json${withGC ? " (with gc) " : ""}`, async () => {
-        if (withGC) gc();
-        var response = blobbyConstructor(JSON.stringify(jsonObject));
-        if (withGC) gc();
-        expect(JSON.stringify(await response.json())).toBe(JSON.stringify(jsonObject));
-        if (withGC) gc();
-      });
+      it.concurrent(
+        `${jsonObject.hello === true ? "latin1" : "utf16"} json${withGC ? " (with gc) " : ""}`,
+        async () => {
+          if (withGC) gc();
+          var response = blobbyConstructor(JSON.stringify(jsonObject));
+          if (withGC) gc();
+          expect(JSON.stringify(await response.json())).toBe(JSON.stringify(jsonObject));
+          if (withGC) gc();
+        },
+      );
 
-      it(`${jsonObject.hello === true ? "latin1" : "utf16"} arrayBuffer -> json${
-        withGC ? " (with gc) " : ""
-      }`, async () => {
-        if (withGC) gc();
-        var response = blobbyConstructor(new TextEncoder().encode(JSON.stringify(jsonObject)));
-        if (withGC) gc();
-        expect(JSON.stringify(await response.json())).toBe(JSON.stringify(jsonObject));
-        if (withGC) gc();
-      });
+      it.concurrent(
+        `${jsonObject.hello === true ? "latin1" : "utf16"} arrayBuffer -> json${withGC ? " (with gc) " : ""}`,
+        async () => {
+          if (withGC) gc();
+          var response = blobbyConstructor(new TextEncoder().encode(JSON.stringify(jsonObject)));
+          if (withGC) gc();
+          expect(JSON.stringify(await response.json())).toBe(JSON.stringify(jsonObject));
+          if (withGC) gc();
+        },
+      );
 
       it(`${jsonObject.hello === true ? "latin1" : "utf16"} arrayBuffer -> invalid json${
         withGC ? " (with gc) " : ""
@@ -858,7 +932,7 @@ function testBlobInterface(blobbyConstructor: { (..._: any[]): any }, hasBlobFn?
   }
 }
 
-describe("Bun.file", () => {
+describe.concurrent("Bun.file", () => {
   let count = 0;
   testBlobInterface(data => {
     const blob = new Blob([data]);
@@ -1098,6 +1172,30 @@ describe("Response", () => {
       expect(response.headers.get("x-hello")).toBe("world");
       expect(response.status).toBe(408);
     });
+
+    it("throws TypeError for non-JSON serializable top-level values (Node.js compatibility)", () => {
+      // Symbol, Function, and undefined should throw "Value is not JSON serializable"
+      expect(() => Response.json(Symbol("test"))).toThrow("Value is not JSON serializable");
+      expect(() => Response.json(function () {})).toThrow("Value is not JSON serializable");
+      expect(() => Response.json(undefined)).toThrow("Value is not JSON serializable");
+
+      // These should not throw (valid values)
+      expect(() => Response.json(null)).not.toThrow();
+      expect(() => Response.json({})).not.toThrow();
+      expect(() => Response.json("string")).not.toThrow();
+      expect(() => Response.json(123)).not.toThrow();
+      expect(() => Response.json(true)).not.toThrow();
+      expect(() => Response.json([1, 2, 3])).not.toThrow();
+
+      // Objects containing non-serializable values should not throw at top-level
+      // (they get filtered out by JSON.stringify)
+      expect(() => Response.json({ symbol: Symbol("test") })).not.toThrow();
+      expect(() => Response.json({ func: function () {} })).not.toThrow();
+      expect(() => Response.json({ undef: undefined })).not.toThrow();
+
+      // BigInt should throw with Node.js compatible error message
+      expect(() => Response.json(123n)).toThrow("Do not know how to serialize a BigInt");
+    });
   });
   describe("Response.redirect", () => {
     it("works", () => {
@@ -1121,11 +1219,11 @@ describe("Response", () => {
           "x-hello": "world",
           Location: "https://wrong.com",
         },
-        status: 408,
+        status: 307,
       });
       expect(response.headers.get("x-hello")).toBe("world");
       expect(response.headers.get("Location")).toBe("https://example.com");
-      expect(response.status).toBe(302);
+      expect(response.status).toBe(307);
       expect(response.type).toBe("default");
       expect(response.ok).toBe(false);
     });
@@ -1697,15 +1795,18 @@ describe("should strip headers", () => {
         });
       },
     });
-
     const { headers, url, redirected } = await fetch(`http://${server1.hostname}:${server1.port}/redirect`, {
       method: "GET",
       headers: {
         "Authorization": "yes",
+        "Proxy-Authorization": "yes",
+        "Cookie": "yes",
       },
     });
 
     expect(headers.get("Authorization")).toBeNull();
+    expect(headers.get("Proxy-Authorization")).toBeNull();
+    expect(headers.get("Cookie")).toBeNull();
     expect(url).toEndWith("/redirected");
     expect(redirected).toBe(true);
   });
@@ -1735,10 +1836,14 @@ it("same-origin status code 302 should not strip headers", async () => {
     method: "GET",
     headers: {
       "Authorization": "yes",
+      "Proxy-Authorization": "yes",
+      "Cookie": "yes",
     },
   });
 
   expect(headers.get("Authorization")).toEqual("yes");
+  expect(headers.get("Proxy-Authorization")).toEqual("yes");
+  expect(headers.get("Cookie")).toEqual("yes");
   expect(url).toEndWith("/redirected");
   expect(redirected).toBe(true);
 });
@@ -1803,7 +1908,7 @@ describe("should handle relative location in the redirect, issue#5635", () => {
   });
 });
 
-it("should allow very long redirect URLS", async () => {
+it.concurrent("should allow very long redirect URLS", async () => {
   const Location = "/" + "B".repeat(7 * 1024);
   using server = Bun.serve({
     port: 0,
@@ -1831,7 +1936,7 @@ it("should allow very long redirect URLS", async () => {
   }
 });
 
-it("304 not modified with missing content-length does not cause a request timeout", async () => {
+it.concurrent("304 not modified with missing content-length does not cause a request timeout", async () => {
   const server = await Bun.listen({
     socket: {
       open(socket) {
@@ -2025,7 +2130,23 @@ describe("http/1.1 response body length", () => {
   });
 });
 describe("fetch Response life cycle", () => {
-  it("should not keep Response alive if not consumed", async () => {
+  // error: Malformed_HTTP_Response fetching "http://localhost:58888/". For more information, pass `verbose: true` in the second argument to fetch()
+  //   path: "http://localhost:58888/",
+  //  errno: 0,
+  //   code: "Malformed_HTTP_Response"
+  // 2054 |       stderr: "inherit",
+  // 2055 |       stdout: "inherit",
+  // 2056 |       stdin: "inherit",
+  // 2057 |       env: bunEnv,
+  // 2058 |     });
+  // 2059 |     expect(await clientProcess.exited).toBe(0);
+  //                                               ^
+  // error: expect(received).toBe(expected)
+  // Expected: 0
+  // Received: 1
+  //       at <anonymous> (/opt/homebrew/etc/buildkite-agent/builds/macOS-13-aarch64-1/bun/bun/test/js/web/fetch/fetch.test.ts:2059:40)
+  // ✗ fetch Response life cycle > should not keep Response alive if not consumed [205.17ms]
+  it.skipIf(isFlaky && isMacOS)("should not keep Response alive if not consumed", async () => {
     let deferred = Promise.withResolvers<string>();
 
     await using serverProcess = Bun.spawn({

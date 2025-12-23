@@ -1,37 +1,16 @@
-const std = @import("std");
-const bun = @import("root").bun;
-const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayListUnmanaged;
-
 pub const css = @import("../css_parser.zig");
 
-const SmallList = css.SmallList;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
-const Error = css.Error;
 
 const Property = css.Property;
 const PropertyId = css.PropertyId;
 
-const ContainerName = css.css_rules.container.ContainerName;
-
 const CSSNumberFns = css.css_values.number.CSSNumberFns;
 const LengthPercentage = css.css_values.length.LengthPercentage;
-const CustomIdent = css.css_values.ident.CustomIdent;
-const CSSString = css.css_values.string.CSSString;
 const CSSNumber = css.css_values.number.CSSNumber;
 const LengthPercentageOrAuto = css.css_values.length.LengthPercentageOrAuto;
-const Size2D = css.css_values.size.Size2D;
-const DashedIdent = css.css_values.ident.DashedIdent;
-const Image = css.css_values.image.Image;
-const CssColor = css.css_values.color.CssColor;
-const Ratio = css.css_values.ratio.Ratio;
 const Length = css.css_values.length.LengthValue;
-const Rect = css.css_values.rect.Rect;
-const NumberOrPercentage = css.css_values.percentage.NumberOrPercentage;
-const CustomIdentList = css.css_values.ident.CustomIdentList;
-const Angle = css.css_values.angle.Angle;
-const Url = css.css_values.url.Url;
 const CSSInteger = css.css_values.number.CSSInteger;
 
 const isFlex2009 = css.prefixes.Feature.isFlex2009;
@@ -50,7 +29,12 @@ pub const FlexDirection = enum {
     /// Flex items are laid out in a column, and reversed.
     @"column-reverse",
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 
     pub fn default() FlexDirection {
         return .row;
@@ -76,7 +60,12 @@ pub const FlexWrap = enum {
     /// The flex items wrap, in reverse.
     @"wrap-reverse",
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 
     pub fn default() FlexWrap {
         return .nowrap;
@@ -94,7 +83,7 @@ pub const FlexFlow = struct {
     /// How the flex items wrap.
     wrap: FlexWrap,
 
-    pub usingnamespace css.DefineShorthand(@This(), css.PropertyIdTag.@"flex-flow", PropertyFieldMap);
+    // (old using name space) css.DefineShorthand(@This(), css.PropertyIdTag.@"flex-flow", PropertyFieldMap);
 
     pub const PropertyFieldMap = .{
         .direction = css.PropertyIdTag.@"flex-direction",
@@ -134,10 +123,10 @@ pub const FlexFlow = struct {
         };
     }
 
-    pub fn toCss(this: *const FlexFlow, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const FlexFlow, dest: *css.Printer) css.PrintErr!void {
         var needs_space = false;
         if (!this.direction.eql(&FlexDirection.default()) or this.wrap.eql(&FlexWrap.default())) {
-            try this.direction.toCss(W, dest);
+            try this.direction.toCss(dest);
             needs_space = true;
         }
 
@@ -145,7 +134,7 @@ pub const FlexFlow = struct {
             if (needs_space) {
                 try dest.writeStr(" ");
             }
-            try this.wrap.toCss(W, dest);
+            try this.wrap.toCss(dest);
         }
 
         return;
@@ -170,7 +159,7 @@ pub const Flex = struct {
     /// The flex basis.
     basis: LengthPercentageOrAuto,
 
-    pub usingnamespace css.DefineShorthand(@This(), css.PropertyIdTag.flex, PropertyFieldMap);
+    // (old using name space) css.DefineShorthand(@This(), css.PropertyIdTag.flex, PropertyFieldMap);
 
     pub const PropertyFieldMap = .{
         .grow = css.PropertyIdTag.@"flex-grow",
@@ -227,7 +216,7 @@ pub const Flex = struct {
         };
     }
 
-    pub fn toCss(this: *const Flex, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const Flex, dest: *css.Printer) css.PrintErr!void {
         if (this.grow == 0.0 and this.shrink == 0.0 and this.basis == .auto) {
             try dest.writeStr("none");
             return;
@@ -251,10 +240,10 @@ pub const Flex = struct {
         };
 
         if (this.grow != 1.0 or this.shrink != 1.0 or basis_kind != .NonZero) {
-            try CSSNumberFns.toCss(&this.grow, W, dest);
+            try CSSNumberFns.toCss(&this.grow, dest);
             if (this.shrink != 1.0 or basis_kind == .Length) {
                 try dest.writeStr(" ");
-                try CSSNumberFns.toCss(&this.shrink, W, dest);
+                try CSSNumberFns.toCss(&this.shrink, dest);
             }
         }
 
@@ -262,7 +251,7 @@ pub const Flex = struct {
             if (this.grow != 1.0 or this.shrink != 1.0 or basis_kind == .Length) {
                 try dest.writeStr(" ");
             }
-            try this.basis.toCss(W, dest);
+            try this.basis.toCss(dest);
         }
     }
 
@@ -289,7 +278,12 @@ pub const BoxOrient = enum {
     /// Items are laid out along the block axis, according to the writing direction.
     @"block-axis",
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 /// A value for the legacy (prefixed) [box-direction](https://www.w3.org/TR/2009/WD-css3-flexbox-20090723/#displayorder) property.
@@ -300,7 +294,12 @@ pub const BoxDirection = enum {
     /// Items flow in the reverse direction.
     reverse,
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 pub const FlexAlign = BoxAlign;
@@ -321,7 +320,12 @@ pub const BoxAlign = enum {
     /// Items are stretched.
     stretch,
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 
     pub fn fromStandard(@"align": *const css.css_properties.@"align".AlignItems) ?BoxAlign {
         return switch (@"align".*) {
@@ -351,7 +355,12 @@ pub const BoxPack = enum {
     /// Items are justified to the start and end.
     justify,
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 
     pub fn fromStandard(justify: *const css.css_properties.@"align".JustifyContent) ?BoxPack {
         return switch (justify.*) {
@@ -379,7 +388,12 @@ pub const BoxLines = enum {
     /// Items may wrap into multiple lines.
     multiple,
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 
     pub fn fromStandard(wrap: *const FlexWrap) ?BoxLines {
         return switch (wrap.*) {
@@ -407,7 +421,12 @@ pub const FlexPack = enum {
     /// Items are distributed evenly, with half size spaces on either end.
     distribute,
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 
     pub fn fromStandard(justify: *const css.css_properties.@"align".JustifyContent) ?FlexPack {
         return switch (justify.*) {
@@ -444,7 +463,12 @@ pub const FlexItemAlign = enum {
     /// The item is stretched.
     stretch,
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 
     pub fn fromStandard(justify: *const css.css_properties.@"align".AlignSelf) ?FlexItemAlign {
         return switch (justify.*) {
@@ -479,7 +503,12 @@ pub const FlexLinePack = enum {
     /// Content is stretched.
     stretch,
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 
     pub fn fromStandard(justify: *const css.css_properties.@"align".AlignContent) ?FlexLinePack {
         return switch (justify.*) {
@@ -554,7 +583,7 @@ pub const FlexHandler = struct {
                 // If two vendor prefixes for the same property have different
                 // values, we need to flush what we have immediately to preserve order.
                 if (@field(self, prop)) |*field| {
-                    if (!std.meta.eql(field[0], val.*) and !field[1].contains(vp.*)) {
+                    if (!std.meta.eql(field[0], val.*) and !bun.bits.contains(css.VendorPrefix, field[1], vp.*)) {
                         self.flush(d, ctx);
                     }
                 }
@@ -575,7 +604,7 @@ pub const FlexHandler = struct {
                 // Otherwise, update the value and add the prefix
                 if (@field(self, prop)) |*field| {
                     field[0] = css.generic.deepClone(@TypeOf(val.*), val, ctx.allocator);
-                    field[1].insert(vp.*);
+                    bun.bits.insert(css.VendorPrefix, &field[1], vp.*);
                 } else {
                     @field(self, prop) = .{
                         css.generic.deepClone(@TypeOf(val.*), val, ctx.allocator),
@@ -713,17 +742,17 @@ pub const FlexHandler = struct {
             const dir = val[0];
             if (context.targets.browsers) |targets| {
                 const prefixes = context.targets.prefixes(css.VendorPrefix.NONE, css.prefixes.Feature.flex_direction);
-                var prefixes_2009 = css.VendorPrefix.empty();
+                var prefixes_2009 = css.VendorPrefix{};
                 if (isFlex2009(targets)) {
-                    prefixes_2009.insert(css.VendorPrefix.WEBKIT);
+                    prefixes_2009.webkit = true;
                 }
-                if (prefixes.contains(css.VendorPrefix.MOZ)) {
-                    prefixes_2009.insert(css.VendorPrefix.MOZ);
+                if (prefixes.moz) {
+                    prefixes_2009.moz = true;
                 }
                 if (!prefixes_2009.isEmpty()) {
                     const orient, const newdir = dir.to2009();
-                    dest.append(context.allocator, Property{ .@"box-orient" = .{ orient, prefixes_2009 } }) catch bun.outOfMemory();
-                    dest.append(context.allocator, Property{ .@"box-direction" = .{ newdir, prefixes_2009 } }) catch bun.outOfMemory();
+                    bun.handleOom(dest.append(context.allocator, Property{ .@"box-orient" = .{ orient, prefixes_2009 } }));
+                    bun.handleOom(dest.append(context.allocator, Property{ .@"box-direction" = .{ newdir, prefixes_2009 } }));
                 }
             }
         }
@@ -738,16 +767,16 @@ pub const FlexHandler = struct {
             if (!intersection.isEmpty()) {
                 var prefix = context.targets.prefixes(intersection, css.prefixes.Feature.flex_flow);
                 // Firefox only implemented the 2009 spec prefixed.
-                prefix.remove(css.VendorPrefix.MOZ);
+                prefix.moz = false;
                 dest.append(context.allocator, Property{ .@"flex-flow" = .{
                     FlexFlow{
                         .direction = dir.*,
                         .wrap = wrapinner.*,
                     },
                     prefix,
-                } }) catch bun.outOfMemory();
-                dir_prefix.remove(intersection);
-                wrap_prefix.remove(intersection);
+                } }) catch |err| bun.handleOom(err);
+                bun.bits.remove(css.VendorPrefix, dir_prefix, intersection);
+                bun.bits.remove(css.VendorPrefix, wrap_prefix, intersection);
             }
         }
 
@@ -758,15 +787,15 @@ pub const FlexHandler = struct {
             if (grow) |val| {
                 const g = val[0];
                 const prefixes = context.targets.prefixes(css.VendorPrefix.NONE, css.prefixes.Feature.flex_grow);
-                var prefixes_2009 = css.VendorPrefix.empty();
+                var prefixes_2009 = css.VendorPrefix{};
                 if (isFlex2009(targets)) {
-                    prefixes_2009.insert(css.VendorPrefix.WEBKIT);
+                    prefixes_2009.webkit = true;
                 }
-                if (prefixes.contains(css.VendorPrefix.MOZ)) {
-                    prefixes_2009.insert(css.VendorPrefix.MOZ);
+                if (prefixes.moz) {
+                    prefixes_2009.moz = true;
                 }
                 if (!prefixes_2009.isEmpty()) {
-                    dest.append(context.allocator, Property{ .@"box-flex" = .{ g, prefixes_2009 } }) catch bun.outOfMemory();
+                    bun.handleOom(dest.append(context.allocator, Property{ .@"box-flex" = .{ g, prefixes_2009 } }));
                 }
             }
         }
@@ -783,7 +812,7 @@ pub const FlexHandler = struct {
             if (!intersection.isEmpty()) {
                 var prefix = context.targets.prefixes(intersection, css.prefixes.Feature.flex);
                 // Firefox only implemented the 2009 spec prefixed.
-                prefix.remove(css.VendorPrefix.MOZ);
+                prefix.moz = false;
                 dest.append(context.allocator, Property{ .flex = .{
                     Flex{
                         .grow = g,
@@ -791,10 +820,10 @@ pub const FlexHandler = struct {
                         .basis = b,
                     },
                     prefix,
-                } }) catch bun.outOfMemory();
-                g_prefix.remove(intersection);
-                s_prefix.remove(intersection);
-                b_prefix.remove(intersection);
+                } }) catch |err| bun.handleOom(err);
+                bun.bits.remove(css.VendorPrefix, g_prefix, intersection);
+                bun.bits.remove(css.VendorPrefix, s_prefix, intersection);
+                bun.bits.remove(css.VendorPrefix, b_prefix, intersection);
             }
         }
 
@@ -821,15 +850,15 @@ pub const FlexHandler = struct {
             if (!prefix.isEmpty()) {
                 prefix = ctx.targets.prefixes(prefix, @field(css.prefixes.Feature, feature_name));
                 if (comptime prop_2009) |p2009| {
-                    if (prefix.contains(css.VendorPrefix.NONE)) {
+                    if (prefix.none) {
                         // 2009 spec, implemented by webkit and firefox
                         if (ctx.targets.browsers) |targets| {
-                            var prefixes_2009 = css.VendorPrefix.empty();
+                            var prefixes_2009 = css.VendorPrefix{};
                             if (isFlex2009(targets)) {
-                                prefixes_2009.insert(css.VendorPrefix.WEBKIT);
+                                prefixes_2009.webkit = true;
                             }
-                            if (prefix.contains(css.VendorPrefix.MOZ)) {
-                                prefixes_2009.insert(css.VendorPrefix.MOZ);
+                            if (prefix.moz) {
+                                prefixes_2009.moz = true;
                             }
                             if (!prefixes_2009.isEmpty()) {
                                 const s = brk: {
@@ -841,7 +870,7 @@ pub const FlexHandler = struct {
                                     dest.append(ctx.allocator, @unionInit(Property, p2009[1], .{
                                         v,
                                         prefixes_2009,
-                                    })) catch bun.outOfMemory();
+                                    })) catch |err| bun.handleOom(err);
                                 }
                             }
                         }
@@ -850,25 +879,25 @@ pub const FlexHandler = struct {
 
                 if (comptime prop_2012) |p2012| {
                     var ms = true;
-                    if (prefix.contains(css.VendorPrefix.MS)) {
+                    if (prefix.ms) {
                         dest.append(ctx.allocator, @unionInit(Property, p2012, .{
                             val,
                             css.VendorPrefix.MS,
-                        })) catch bun.outOfMemory();
+                        })) catch |err| bun.handleOom(err);
                         ms = false;
                     }
 
                     if (!ms) {
-                        prefix.remove(css.VendorPrefix.MS);
+                        prefix.ms = false;
                     }
                 }
 
                 // Firefox only implemented the 2009 spec prefixed.
-                prefix.remove(css.VendorPrefix.MOZ);
+                prefix.moz = false;
                 dest.append(ctx.allocator, @unionInit(Property, prop, .{
                     val,
                     prefix,
-                })) catch bun.outOfMemory();
+                })) catch |err| bun.handleOom(err);
             }
         }
     }
@@ -882,7 +911,7 @@ pub const FlexHandler = struct {
                 dest.append(ctx.allocator, @unionInit(Property, field_name, .{
                     val,
                     prefix,
-                })) catch bun.outOfMemory();
+                })) catch |err| bun.handleOom(err);
             } else {
                 // css.generic.eql(comptime T: type, lhs: *const T, rhs: *const T)
                 // css.generic.deinit(@TypeOf(val), &val, ctx.allocator);
@@ -914,3 +943,7 @@ pub const FlexHandler = struct {
         };
     }
 };
+
+const bun = @import("bun");
+const std = @import("std");
+const Allocator = std.mem.Allocator;

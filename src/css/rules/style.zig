@@ -1,20 +1,6 @@
-const std = @import("std");
 pub const css = @import("../css_parser.zig");
-const bun = @import("root").bun;
-const ArrayList = std.ArrayListUnmanaged;
-const MediaList = css.MediaList;
-const CustomMedia = css.CustomMedia;
 const Printer = css.Printer;
-const Maybe = css.Maybe;
-const PrinterError = css.PrinterError;
 const PrintErr = css.PrintErr;
-const Dependency = css.Dependency;
-const dependencies = css.dependencies;
-const Url = css.css_values.url.Url;
-const Size2D = css.css_values.size.Size2D;
-const fontprops = css.css_properties.font;
-const LayerName = css.css_rules.layer.LayerName;
-const SupportsCondition = css.css_rules.supports.SupportsCondition;
 const Location = css.css_rules.Location;
 
 pub fn StyleRule(comptime R: type) type {
@@ -58,7 +44,7 @@ pub fn StyleRule(comptime R: type) type {
 
         pub fn updatePrefix(this: *This, context: *css.MinifyContext) void {
             this.vendor_prefix = css.selector.getPrefix(&this.selectors);
-            if (this.vendor_prefix.contains(css.VendorPrefix{ .none = true }) and
+            if (this.vendor_prefix.none and
                 context.targets.shouldCompileSelectors())
             {
                 this.vendor_prefix = css.selector.downlevelSelectors(context.allocator, this.selectors.v.slice_mut(), context.targets.*);
@@ -69,9 +55,9 @@ pub fn StyleRule(comptime R: type) type {
             return css.selector.isCompatible(this.selectors.v.slice(), targets);
         }
 
-        pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+        pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
             if (this.vendor_prefix.isEmpty()) {
-                try this.toCssBase(W, dest);
+                try this.toCssBase(dest);
             } else {
                 var first_rule = true;
                 inline for (css.VendorPrefix.FIELDS) |field| {
@@ -87,21 +73,21 @@ pub fn StyleRule(comptime R: type) type {
 
                         const prefix = css.VendorPrefix.fromName(field);
                         dest.vendor_prefix = prefix;
-                        try this.toCssBase(W, dest);
+                        try this.toCssBase(dest);
                     }
                 }
 
-                dest.vendor_prefix = css.VendorPrefix.empty();
+                dest.vendor_prefix = .{};
             }
         }
 
-        fn toCssBase(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+        fn toCssBase(this: *const This, dest: *Printer) PrintErr!void {
             // If supported, or there are no targets, preserve nesting. Otherwise, write nested rules after parent.
             const supports_nesting = this.rules.v.items.len == 0 or
                 !css.Targets.shouldCompileSame(
-                &dest.targets,
-                .nesting,
-            );
+                    &dest.targets,
+                    .nesting,
+                );
 
             const len = this.declarations.declarations.items.len + this.declarations.important_declarations.items.len;
             const has_declarations = supports_nesting or len > 0 or this.rules.v.items.len == 0;
@@ -110,7 +96,7 @@ pub fn StyleRule(comptime R: type) type {
                 //   #[cfg(feature = "sourcemap")]
                 //   dest.add_mapping(self.loc);
 
-                try css.selector.serialize.serializeSelectorList(this.selectors.v.slice(), W, dest, dest.context(), false);
+                try css.selector.serialize.serializeSelectorList(this.selectors.v.slice(), dest, dest.context(), false);
                 try dest.whitespace();
                 try dest.writeChar('{');
                 dest.indent();
@@ -127,24 +113,24 @@ pub fn StyleRule(comptime R: type) type {
                         if (decl.* == .composes) {
                             const composes = &decl.composes;
                             if (dest.isNested() and dest.css_module != null) {
-                                return dest.newError(css.PrinterErrorKind.invalid_composes_nesting, composes.loc);
+                                return dest.newError(css.PrinterErrorKind.invalid_composes_nesting, composes.cssparser_loc);
                             }
 
                             if (dest.css_module) |*css_module| {
                                 if (css_module.handleComposes(
-                                    dest.allocator,
+                                    dest,
                                     &this.selectors,
                                     composes,
                                     this.loc.source_index,
                                 ).asErr()) |error_kind| {
-                                    return dest.newError(error_kind, composes.loc);
+                                    return dest.newError(error_kind, composes.cssparser_loc);
                                 }
                                 continue;
                             }
                         }
 
                         try dest.newline();
-                        try decl.toCss(W, dest, important);
+                        try decl.toCss(dest, important);
                         if (i != len - 1 or !dest.minify or (supports_nesting and this.rules.v.items.len > 0)) {
                             try dest.writeChar(';');
                         }
@@ -157,8 +143,7 @@ pub fn StyleRule(comptime R: type) type {
             const Helpers = struct {
                 pub fn newline(
                     self: *const This,
-                    comptime W2: type,
-                    d: *Printer(W2),
+                    d: *Printer,
                     supports_nesting2: bool,
                     len1: usize,
                 ) PrintErr!void {
@@ -170,7 +155,7 @@ pub fn StyleRule(comptime R: type) type {
                     }
                 }
 
-                pub fn end(comptime W2: type, d: *Printer(W2), has_decls: bool) PrintErr!void {
+                pub fn end(d: *Printer, has_decls: bool) PrintErr!void {
                     if (has_decls) {
                         d.dedent();
                         try d.newline();
@@ -181,15 +166,15 @@ pub fn StyleRule(comptime R: type) type {
 
             // Write nested rules after the parent.
             if (supports_nesting) {
-                try Helpers.newline(this, W, dest, supports_nesting, len);
-                try this.rules.toCss(W, dest);
-                try Helpers.end(W, dest, has_declarations);
+                try Helpers.newline(this, dest, supports_nesting, len);
+                try this.rules.toCss(dest);
+                try Helpers.end(dest, has_declarations);
             } else {
-                try Helpers.end(W, dest, has_declarations);
-                try Helpers.newline(this, W, dest, supports_nesting, len);
+                try Helpers.end(dest, has_declarations);
+                try Helpers.newline(this, dest, supports_nesting, len);
                 try dest.withContext(&this.selectors, this, struct {
-                    pub fn toCss(self: *const This, WW: type, d: *Printer(WW)) PrintErr!void {
-                        return self.rules.toCss(WW, d);
+                    pub fn toCss(self: *const This, d: *Printer) PrintErr!void {
+                        return self.rules.toCss(d);
                     }
                 }.toCss);
             }
@@ -198,7 +183,7 @@ pub fn StyleRule(comptime R: type) type {
         pub fn minify(this: *This, context: *css.MinifyContext, parent_is_unused: bool) css.MinifyErr!bool {
             var unused = false;
             if (context.unused_symbols.count() > 0) {
-                if (css.selector.isUnused(this.selectors.v.slice(), context.unused_symbols, parent_is_unused)) {
+                if (css.selector.isUnused(this.selectors.v.slice(), context.unused_symbols, &context.extra.symbols, parent_is_unused)) {
                     if (this.rules.v.items.len == 0) {
                         return true;
                     }
@@ -245,16 +230,19 @@ pub fn StyleRule(comptime R: type) type {
             return this.declarations.len() == other.declarations.len() and
                 this.selectors.eql(&other.selectors) and
                 brk: {
-                var len = @min(this.declarations.declarations.items.len, other.declarations.declarations.items.len);
-                for (this.declarations.declarations.items[0..len], other.declarations.declarations.items[0..len]) |*a, *b| {
-                    if (!a.propertyId().eql(&b.propertyId())) break :brk false;
-                }
-                len = @min(this.declarations.important_declarations.items.len, other.declarations.important_declarations.items.len);
-                for (this.declarations.important_declarations.items[0..len], other.declarations.important_declarations.items[0..len]) |*a, *b| {
-                    if (!a.propertyId().eql(&b.propertyId())) break :brk false;
-                }
-                break :brk true;
-            };
+                    var len = @min(this.declarations.declarations.items.len, other.declarations.declarations.items.len);
+                    for (this.declarations.declarations.items[0..len], other.declarations.declarations.items[0..len]) |*a, *b| {
+                        if (!a.propertyId().eql(&b.propertyId())) break :brk false;
+                    }
+                    len = @min(this.declarations.important_declarations.items.len, other.declarations.important_declarations.items.len);
+                    for (this.declarations.important_declarations.items[0..len], other.declarations.important_declarations.items[0..len]) |*a, *b| {
+                        if (!a.propertyId().eql(&b.propertyId())) break :brk false;
+                    }
+                    break :brk true;
+                };
         }
     };
 }
+
+const std = @import("std");
+const ArrayList = std.ArrayListUnmanaged;

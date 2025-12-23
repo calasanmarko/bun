@@ -1,37 +1,8 @@
-const std = @import("std");
-const bun = @import("root").bun;
-const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayListUnmanaged;
-
 pub const css = @import("../css_parser.zig");
 
 const SmallList = css.SmallList;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
-const Error = css.Error;
-
-const ContainerName = css.css_rules.container.ContainerName;
-
-const LengthPercentage = css.css_values.length.LengthPercentage;
-const CustomIdent = css.css_values.ident.CustomIdent;
-const CSSString = css.css_values.string.CSSString;
-const CSSNumber = css.css_values.number.CSSNumber;
-const LengthPercentageOrAuto = css.css_values.length.LengthPercentageOrAuto;
-const Size2D = css.css_values.size.Size2D;
-const DashedIdent = css.css_values.ident.DashedIdent;
-const Image = css.css_values.image.Image;
-const CssColor = css.css_values.color.CssColor;
-const Ratio = css.css_values.ratio.Ratio;
-const Length = css.css_values.length.LengthValue;
-const Rect = css.css_values.rect.Rect;
-const NumberOrPercentage = css.css_values.percentage.NumberOrPercentage;
-const CustomIdentList = css.css_values.ident.CustomIdentList;
-const Angle = css.css_values.angle.Angle;
-const Url = css.css_values.url.Url;
-const Percentage = css.css_values.percentage.Percentage;
-
-const GenericBorder = css.css_properties.border.GenericBorder;
-const LineStyle = css.css_properties.border.LineStyle;
 
 const Property = css.css_properties.Property;
 const PropertyId = css.css_properties.PropertyId;
@@ -51,9 +22,6 @@ pub const Transition = struct {
     delay: Time,
     /// The easing function for the transition.
     timing_function: EasingFunction,
-
-    pub usingnamespace css.DefineShorthand(@This(), css.PropertyIdTag.transition, PropertyFieldMap);
-    pub usingnamespace css.DefineListShorthand(@This());
 
     pub const PropertyFieldMap = .{
         .property = css.PropertyIdTag.@"transition-property",
@@ -116,21 +84,21 @@ pub const Transition = struct {
         } };
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *Printer(W)) PrintErr!void {
-        try this.property.toCss(W, dest);
+    pub fn toCss(this: *const @This(), dest: *Printer) PrintErr!void {
+        try this.property.toCss(dest);
         if (!this.duration.isZero() or !this.delay.isZero()) {
             try dest.writeChar(' ');
-            try this.duration.toCss(W, dest);
+            try this.duration.toCss(dest);
         }
 
         if (!this.timing_function.isEase()) {
             try dest.writeChar(' ');
-            try this.timing_function.toCss(W, dest);
+            try this.timing_function.toCss(dest);
         }
 
         if (!this.delay.isZero()) {
             try dest.writeChar(' ');
-            try this.delay.toCss(W, dest);
+            try this.delay.toCss(dest);
         }
     }
 };
@@ -191,7 +159,7 @@ pub const TransitionHandler = struct {
                 dest.append(
                     context.allocator,
                     .{ .unparsed = x.getPrefixed(context.allocator, context.targets, Feature.transition) },
-                ) catch bun.outOfMemory();
+                ) catch |err| bun.handleOom(err);
             } else return false,
             else => return false,
         }
@@ -211,7 +179,7 @@ pub const TransitionHandler = struct {
             const v = &p.*[0];
             const prefixes = &p.*[1];
             v.* = val.deepClone(context.allocator);
-            prefixes.insert(vp);
+            bun.bits.insert(VendorPrefix, prefixes, vp);
             prefixes.* = context.targets.prefixes(prefixes.*, feature);
         } else {
             const prefixes = context.targets.prefixes(vp, feature);
@@ -227,7 +195,7 @@ pub const TransitionHandler = struct {
         if (@field(this, prop)) |*p| {
             const v = &p.*[0];
             const prefixes = &p.*[1];
-            if (!val.eql(v) and !prefixes.contains(vp)) {
+            if (!val.eql(v) and !bun.bits.contains(VendorPrefix, prefixes.*, vp)) {
                 this.flush(dest, context);
             }
         }
@@ -276,13 +244,13 @@ pub const TransitionHandler = struct {
                     dest.append(
                         context.allocator,
                         Property{ .transition = .{ transitions.deepClone(context.allocator), intersection } },
-                    ) catch bun.outOfMemory();
+                    ) catch |err| bun.handleOom(err);
                 }
 
-                property_prefixes.remove(intersection);
-                duration_prefixes.remove(intersection);
-                delay_prefixes.remove(intersection);
-                timing_prefixes.remove(intersection);
+                bun.bits.remove(VendorPrefix, property_prefixes, intersection);
+                bun.bits.remove(VendorPrefix, duration_prefixes, intersection);
+                bun.bits.remove(VendorPrefix, timing_prefixes, intersection);
+                bun.bits.remove(VendorPrefix, delay_prefixes, intersection);
             }
         }
 
@@ -299,7 +267,7 @@ pub const TransitionHandler = struct {
                     );
                     rtl_properties = null;
                 } else {
-                    dest.append(context.allocator, Property{ .@"transition-property" = .{ properties, prefix } }) catch bun.outOfMemory();
+                    bun.handleOom(dest.append(context.allocator, Property{ .@"transition-property" = .{ properties, prefix } }));
                 }
             }
         }
@@ -309,7 +277,7 @@ pub const TransitionHandler = struct {
             const prefix: VendorPrefix = _durations.?[1];
             _durations = null;
             if (!prefix.isEmpty()) {
-                dest.append(context.allocator, Property{ .@"transition-duration" = .{ durations, prefix } }) catch bun.outOfMemory();
+                bun.handleOom(dest.append(context.allocator, Property{ .@"transition-duration" = .{ durations, prefix } }));
             }
         }
 
@@ -318,7 +286,7 @@ pub const TransitionHandler = struct {
             const prefix: VendorPrefix = _delays.?[1];
             _delays = null;
             if (!prefix.isEmpty()) {
-                dest.append(context.allocator, Property{ .@"transition-delay" = .{ delays, prefix } }) catch bun.outOfMemory();
+                bun.handleOom(dest.append(context.allocator, Property{ .@"transition-delay" = .{ delays, prefix } }));
             }
         }
 
@@ -327,7 +295,7 @@ pub const TransitionHandler = struct {
             const prefix: VendorPrefix = _timing_functions.?[1];
             _timing_functions = null;
             if (!prefix.isEmpty()) {
-                dest.append(context.allocator, Property{ .@"transition-timing-function" = .{ timing_functions, prefix } }) catch bun.outOfMemory();
+                bun.handleOom(dest.append(context.allocator, Property{ .@"transition-timing-function" = .{ timing_functions, prefix } }));
             }
         }
 
@@ -435,7 +403,7 @@ fn expandProperties(properties: *css.SmallList(PropertyId, 1), context: *css.Pro
 
             // Expand mask properties, which use different vendor-prefixed names.
             if (css.css_properties.masking.getWebkitMaskProperty(properties.at(i))) |property_id| {
-                if (context.targets.prefixes(VendorPrefix.NONE, Feature.mask_border).contains(VendorPrefix.WEBKIT)) {
+                if (context.targets.prefixes(VendorPrefix.NONE, Feature.mask_border).webkit) {
                     properties.insert(context.allocator, i, property_id);
                     i += 1;
                 }
@@ -445,7 +413,7 @@ fn expandProperties(properties: *css.SmallList(PropertyId, 1), context: *css.Pro
                 rtl_props.mut(i).setPrefixesForTargets(context.targets);
 
                 if (css.css_properties.masking.getWebkitMaskProperty(rtl_props.at(i))) |property_id| {
-                    if (context.targets.prefixes(VendorPrefix.NONE, Feature.mask_border).contains(VendorPrefix.WEBKIT)) {
+                    if (context.targets.prefixes(VendorPrefix.NONE, Feature.mask_border).webkit) {
                         rtl_props.insert(context.allocator, i, property_id);
                         i += 1;
                     }
@@ -545,3 +513,7 @@ fn isTransitionProperty(property_id: *const PropertyId) bool {
         else => false,
     };
 }
+
+const bun = @import("bun");
+const std = @import("std");
+const Allocator = std.mem.Allocator;

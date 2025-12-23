@@ -13,6 +13,8 @@
  * that convert JavaScript types to C types and back. Internally,
  * bun uses [tinycc](https://github.com/TinyCC/tinycc), so a big thanks
  * goes to Fabrice Bellard and TinyCC maintainers for making this possible.
+ *
+ * @category FFI
  */
 declare module "bun:ffi" {
   enum FFIType {
@@ -217,44 +219,39 @@ declare module "bun:ffi" {
 
     /**
      * int64 is a 64-bit signed integer
-     *
-     * This is not implemented yet!
      */
     int64_t = 7,
     /**
      * i64 is a 64-bit signed integer
-     *
-     * This is not implemented yet!
      */
     i64 = 7,
 
     /**
      * 64-bit unsigned integer
-     *
-     * This is not implemented yet!
      */
     uint64_t = 8,
     /**
      * 64-bit unsigned integer
-     *
-     * This is not implemented yet!
      */
     u64 = 8,
 
     /**
-     * Doubles are not supported yet!
+     * IEEE-754 double precision float
      */
     double = 9,
+
     /**
-     * Doubles are not supported yet!
+     * Alias of {@link FFIType.double}
      */
     f64 = 9,
+
     /**
-     * Floats are not supported yet!
+     * IEEE-754 single precision float
      */
     float = 10,
+
     /**
-     * Floats are not supported yet!
+     * Alias of {@link FFIType.float}
      */
     f32 = 10,
 
@@ -543,14 +540,6 @@ declare module "bun:ffi" {
 
   type Symbols = Readonly<Record<string, FFIFunction>>;
 
-  // /**
-  //  * Compile a callback function
-  //  *
-  //  * Returns a function pointer
-  //  *
-  //  */
-  // export function callback(ffi: FFIFunction, cb: Function): number;
-
   interface Library<Fns extends Symbols> {
     symbols: ConvertFns<Fns>;
 
@@ -608,6 +597,8 @@ declare module "bun:ffi" {
    * that convert JavaScript types to C types and back. Internally,
    * bun uses [tinycc](https://github.com/TinyCC/tinycc), so a big thanks
    * goes to Fabrice Bellard and TinyCC maintainers for making this possible.
+   *
+   * @category FFI
    */
   function dlopen<Fns extends Record<string, FFIFunction>>(
     name: string | import("bun").BunFile | URL,
@@ -626,9 +617,9 @@ declare module "bun:ffi" {
    * JavaScript:
    * ```js
    * import { cc } from "bun:ffi";
-   * import hello from "./hello.c" with {type: "file"};
+   * import source from "./hello.c" with {type: "file"};
    * const {symbols: {hello}} = cc({
-   *   source: hello,
+   *   source,
    *   symbols: {
    *     hello: {
    *       returns: "cstring",
@@ -681,8 +672,9 @@ declare module "bun:ffi" {
      * @example
      * ```js
      * import { cc } from "bun:ffi";
+     * import source from "./hello.c" with {type: "file"};
      * const {symbols: {hello}} = cc({
-     *   source: hello,
+     *   source,
      *   define: {
      *     "NDEBUG": "1",
      *   },
@@ -707,8 +699,9 @@ declare module "bun:ffi" {
      * @example
      * ```js
      * import { cc } from "bun:ffi";
+     * import source from "./hello.c" with {type: "file"};
      * const {symbols: {hello}} = cc({
-     *   source: hello,
+     *   source,
      *   flags: ["-framework CoreFoundation", "-framework Security"],
      *   symbols: {
      *     hello: {
@@ -1024,6 +1017,8 @@ declare module "bun:ffi" {
    *  // Do something with rawPtr
    * }
    * ```
+   *
+   * @category FFI
    */
   function ptr(view: NodeJS.TypedArray | ArrayBufferLike | DataView, byteOffset?: number): Pointer;
 
@@ -1048,8 +1043,9 @@ declare module "bun:ffi" {
    * thing to do safely. Passing an invalid pointer can crash the program and
    * reading beyond the bounds of the pointer will crash the program or cause
    * undefined behavior. Use with care!
+   *
+   * @category FFI
    */
-
   class CString extends String {
     /**
      * Get a string from a UTF-8 encoded C string

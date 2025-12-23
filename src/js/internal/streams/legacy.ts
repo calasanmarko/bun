@@ -1,6 +1,7 @@
 "use strict";
 
 const EE = require("node:events");
+const { isArrayBufferView, isUint8Array } = require("node:util/types");
 
 const ReflectOwnKeys = Reflect.ownKeys;
 const ArrayIsArray = Array.isArray;
@@ -90,7 +91,7 @@ Stream.prototype.pipe = function (dest, options) {
 };
 
 Stream.prototype.eventNames = function eventNames() {
-  const names = [];
+  const names: PropertyKey[] = [];
   for (const key of ReflectOwnKeys(this._events)) {
     if (typeof this._events[key] === "function" || (ArrayIsArray(this._events[key]) && this._events[key].length > 0)) {
       names.push(key);
@@ -113,4 +114,14 @@ function prependListener(emitter, event, fn) {
   else emitter._events[event] = [fn, emitter._events[event]];
 }
 
-export default { Stream, prependListener };
+// Add helper methods to Stream
+Stream._isArrayBufferView = isArrayBufferView;
+Stream._isUint8Array = isUint8Array;
+Stream._uint8ArrayToBuffer = function _uint8ArrayToBuffer(chunk) {
+  return new $Buffer(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+};
+
+export default { Stream, prependListener } as unknown as {
+  Stream: typeof import("node:stream").Stream;
+  prependListener: typeof prependListener;
+};

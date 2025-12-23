@@ -1,11 +1,3 @@
-const tester = @import("../test/tester.zig");
-const std = @import("std");
-const strings = @import("../string_immutable.zig");
-const FeatureFlags = @import("../feature_flags.zig");
-const default_allocator = @import("../allocators/memory_allocator.zig").c_allocator;
-const bun = @import("root").bun;
-const Fs = @import("../fs.zig");
-
 threadlocal var parser_join_input_buffer: [4096]u8 = undefined;
 threadlocal var parser_buffer: [1024]u8 = undefined;
 
@@ -45,6 +37,16 @@ inline fn nqlAtIndexCaseInsensitive(comptime string_count: comptime_int, index: 
     return false;
 }
 
+/// The given string contains separators that match the platform's path separator style.
+pub fn hasPlatformPathSeparators(input_path: []const u8) bool {
+    if (bun.Environment.isWindows) {
+        // Windows accepts both forward and backward slashes as path separators
+        return bun.strings.indexOfAny(input_path, "\\/") != null;
+    } else {
+        return bun.strings.containsChar(input_path, '/');
+    }
+}
+
 const IsSeparatorFunc = fn (char: u8) bool;
 const IsSeparatorFuncT = fn (comptime T: type, char: anytype) bool;
 const LastSeparatorFunction = fn (slice: []const u8) ?usize;
@@ -82,7 +84,7 @@ pub fn isParentOrEqual(parent_: []const u8, child: []const u8) ParentEqual {
     if (!contains(child, parent)) return .unrelated;
 
     if (child.len == parent.len) return .equal;
-    if (isSepAny(child[parent.len])) return .parent;
+    if (child.len > parent.len and isSepAny(child[parent.len])) return .parent;
     return .unrelated;
 }
 
@@ -495,7 +497,7 @@ pub fn dirname(str: []const u8, comptime platform: Platform) []const u8 {
             const separator = lastIndexOfSeparatorWindows(str) orelse return std.fs.path.diskDesignatorWindows(str);
             return str[0..separator];
         },
-        else => @compileError("not implemented"),
+        .nt => @compileError("not implemented"),
     }
 }
 
@@ -782,12 +784,12 @@ pub fn normalizeStringGenericTZ(
     var dotdot: usize = 0;
     var path_begin: usize = 0;
 
-    const volLen, const indexOfThirdUNCSlash = if (isWindows and !options.allow_above_root)
+    const volLen, const indexOfThirdUNCSlash = if (isWindows)
         windowsVolumeNameLenT(T, path_)
     else
         .{ 0, 0 };
 
-    if (isWindows and !options.allow_above_root) {
+    if (isWindows) {
         if (volLen > 0) {
             if (options.add_nt_prefix) {
                 @memcpy(buf[buf_i .. buf_i + 4], strings.literal(T, "\\??\\"));
@@ -839,19 +841,6 @@ pub fn normalizeStringGenericTZ(
             buf_i += 1;
             dotdot = buf_i;
             path_begin = 1;
-        }
-    }
-    if (isWindows and options.allow_above_root) {
-        if (path_.len >= 2 and path_[1] == ':') {
-            if (options.add_nt_prefix) {
-                @memcpy(buf[buf_i .. buf_i + 4], &strings.literalBuf(T, "\\??\\"));
-                buf_i += 4;
-            }
-            buf[buf_i] = std.ascii.toUpper(@truncate(path_[0]));
-            buf[buf_i + 1] = ':';
-            buf_i += 2;
-            dotdot = buf_i;
-            path_begin = 2;
         }
     }
 
@@ -1255,6 +1244,14 @@ pub fn joinStringBufWZ(buf: []u16, parts: anytype, comptime platform: Platform) 
     return buf[start_offset..][0..joined.len :0];
 }
 
+pub fn joinStringBufZ(buf: []u8, parts: anytype, comptime platform: Platform) [:0]const u8 {
+    const joined = joinStringBufT(u8, buf[0 .. buf.len - 1], parts, platform);
+    assert(bun.isSliceInBufferT(u8, joined, buf));
+    const start_offset = @intFromPtr(joined.ptr) - @intFromPtr(buf.ptr);
+    buf[joined.len + start_offset] = 0;
+    return buf[start_offset..][0..joined.len :0];
+}
+
 pub fn joinStringBufT(comptime T: type, buf: []T, parts: anytype, comptime platform: Platform) []const T {
     var written: usize = 0;
     var temp_buf_: [4096]T = undefined;
@@ -1273,7 +1270,7 @@ pub fn joinStringBufT(comptime T: type, buf: []T, parts: anytype, comptime platf
     }
 
     if (count * 2 > temp_buf.len) {
-        temp_buf = bun.default_allocator.alloc(T, count * 2) catch bun.outOfMemory();
+        temp_buf = bun.handleOom(bun.default_allocator.alloc(T, count * 2));
         free_temp_buf = true;
     }
 
@@ -1991,7 +1988,7 @@ pub const PosixToWinNormalizer = struct {
 /// Used in PathInlines.h
 /// gets cwd off of the global object
 export fn ResolvePath__joinAbsStringBufCurrentPlatformBunString(
-    globalObject: *bun.JSC.JSGlobalObject,
+    globalObject: *bun.jsc.JSGlobalObject,
     in: bun.String,
 ) bun.String {
     const str = in.toUTF8WithoutRef(bun.default_allocator);
@@ -2004,7 +2001,7 @@ export fn ResolvePath__joinAbsStringBufCurrentPlatformBunString(
         .auto,
     );
 
-    return bun.String.createUTF8(out_slice);
+    return bun.String.cloneUTF8(out_slice);
 }
 
 pub fn platformToPosixInPlace(comptime T: type, path_buffer: []T) void {
@@ -2069,4 +2066,9 @@ pub fn posixToPlatformInPlace(comptime T: type, path_buffer: []T) void {
     }
 }
 
+const Fs = @import("../fs.zig");
+const std = @import("std");
+
+const bun = @import("bun");
 const assert = bun.assert;
+const strings = bun.strings;

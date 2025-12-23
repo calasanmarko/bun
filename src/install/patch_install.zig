@@ -1,36 +1,12 @@
-const bun = @import("root").bun;
-const std = @import("std");
-
-const string = bun.string;
-const stringZ = bun.stringZ;
-const Output = bun.Output;
-const Global = bun.Global;
-const Environment = bun.Environment;
-const strings = bun.strings;
-const MutableString = bun.MutableString;
-const Progress = bun.Progress;
-const String = bun.Semver.String;
-
-const logger = bun.logger;
-const Loc = logger.Loc;
-
-const PackageManager = bun.PackageManager;
 pub const PackageID = bun.install.PackageID;
 pub const DependencyID = bun.install.DependencyID;
 
-const Task = bun.install.Task;
 pub const Lockfile = @import("./lockfile.zig");
 pub const PatchedDep = Lockfile.PatchedDep;
-
-const ThreadPool = bun.ThreadPool;
 
 pub const Resolution = @import("./resolution.zig").Resolution;
 
 pub const PackageInstall = bun.install.PackageInstall;
-pub const PreparePatchPackageInstall = bun.install.PreparePatchPackageInstall;
-
-const Fs = @import("../fs.zig");
-const FileSystem = Fs.FileSystem;
 
 pub const bun_hash_tag = bun.install.bun_hash_tag;
 pub const max_hex_hash_len: comptime_int = brk: {
@@ -54,7 +30,7 @@ pub const PatchTask = struct {
     pre: bool = false,
     next: ?*PatchTask = null,
 
-    const debug = bun.Output.scoped(.InstallPatch, false);
+    const debug = bun.Output.scoped(.InstallPatch, .visible);
 
     const Maybe = bun.sys.Maybe;
 
@@ -88,11 +64,11 @@ pub const PatchTask = struct {
         cache_dir_subpath_without_patch_hash: stringZ,
 
         /// this is non-null if this was called before a Task, for example extracting
-        task_id: ?Task.Id.Type = null,
+        task_id: ?Task.Id = null,
         install_context: ?struct {
             dependency_id: DependencyID,
             tree_id: Lockfile.Tree.Id,
-            path: std.ArrayList(u8),
+            path: std.array_list.Managed(u8),
         } = null,
         // dependency_id: ?struct = null,
 
@@ -133,7 +109,7 @@ pub const PatchTask = struct {
                 this.callback.calc_hash.result = this.calcHash();
             },
             .apply => {
-                this.apply() catch bun.outOfMemory();
+                bun.handleOom(this.apply());
             },
         }
     }
@@ -141,7 +117,7 @@ pub const PatchTask = struct {
     pub fn runFromMainThread(
         this: *PatchTask,
         manager: *PackageManager,
-        comptime log_level: PackageManager.Options.LogLevel,
+        log_level: PackageManager.Options.LogLevel,
     ) !void {
         debug("runFromThreadMainThread {s}", .{@tagName(this.callback)});
         defer {
@@ -165,31 +141,23 @@ pub const PatchTask = struct {
     fn runFromMainThreadCalcHash(
         this: *PatchTask,
         manager: *PackageManager,
-        comptime log_level: PackageManager.Options.LogLevel,
+        log_level: PackageManager.Options.LogLevel,
     ) !void {
         // TODO only works for npm package
         // need to switch on version.tag and handle each case appropriately
         const calc_hash = &this.callback.calc_hash;
         const hash = calc_hash.result orelse {
-            const fmt = "\n\nErrors occured while calculating hash for <b>{s}<r>:\n\n";
-            const args = .{this.callback.calc_hash.patchfile_path};
-            if (comptime log_level.showProgress()) {
-                Output.prettyWithPrinterFn(fmt, args, Progress.log, &manager.progress);
-            } else {
-                Output.prettyErrorln(
-                    fmt,
-                    args,
-                );
+            if (log_level != .silent) {
+                if (calc_hash.logger.hasErrors()) {
+                    calc_hash.logger.print(Output.errorWriter()) catch {};
+                } else {
+                    Output.errGeneric("Failed to calculate hash for patch <b>{s}<r>", .{this.callback.calc_hash.patchfile_path});
+                }
             }
-            if (calc_hash.logger.errors > 0) {
-                Output.prettyErrorln("\n\n", .{});
-                calc_hash.logger.print(Output.errorWriter()) catch {};
-            }
-            Output.flush();
             Global.crash();
         };
 
-        var gop = manager.lockfile.patched_dependencies.getOrPut(manager.allocator, calc_hash.name_and_version_hash) catch bun.outOfMemory();
+        var gop = bun.handleOom(manager.lockfile.patched_dependencies.getOrPut(manager.allocator, calc_hash.name_and_version_hash));
         if (gop.found_existing) {
             gop.value_ptr.setPatchfileHash(hash);
         } else @panic("No entry for patched dependency, this is a bug in Bun.");
@@ -257,7 +225,7 @@ pub const PatchTask = struct {
     // 4. Apply patches to pkg in temp dir
     // 5. Add bun tag for patch hash
     // 6. rename() newly patched pkg to cache
-    pub fn apply(this: *PatchTask) !void {
+    pub fn apply(this: *PatchTask) bun.OOM!void {
         var log = &this.callback.apply.logger;
         debug("apply patch task", .{});
         bun.assert(this.callback == .apply);
@@ -304,31 +272,36 @@ pub const PatchTask = struct {
 
         // 2. Create temp dir to do all the modifications
         var tmpname_buf: [1024]u8 = undefined;
-        const tempdir_name = bun.span(bun.fs.FileSystem.instance.tmpname("tmp", &tmpname_buf, bun.fastRandom()) catch bun.outOfMemory());
+        const tempdir_name = bun.fs.FileSystem.tmpname("tmp", &tmpname_buf, bun.fastRandom()) catch |err| switch (err) {
+            // max len is 1+16+1+8+3, well below 1024
+            error.NoSpaceLeft => unreachable,
+        };
+
         const system_tmpdir = this.tempdir;
 
         const pkg_name = this.callback.apply.pkgname;
 
-        const dummy_node_modules: PackageManager.NodeModulesFolder = .{
-            .path = std.ArrayList(u8).init(this.manager.allocator),
+        const dummy_node_modules: PackageManager.PackageInstaller.NodeModulesFolder = .{
+            .path = std.array_list.Managed(u8).init(this.manager.allocator),
             .tree_id = 0,
         };
 
         const resolution_label, const resolution_tag = brk: {
             // TODO: fix this threadsafety issue.
             const resolution = &this.manager.lockfile.packages.items(.resolution)[patch.pkg_id];
-            break :brk .{ std.fmt.allocPrint(bun.default_allocator, "{}", .{resolution.fmt(this.manager.lockfile.buffers.string_bytes.items, .posix)}) catch bun.outOfMemory(), resolution.tag };
+            break :brk .{ bun.handleOom(std.fmt.allocPrint(bun.default_allocator, "{f}", .{resolution.fmt(this.manager.lockfile.buffers.string_bytes.items, .posix)})), resolution.tag };
         };
         defer this.manager.allocator.free(resolution_label);
 
         // 3. copy the unpatched files into temp dir
-        var pkg_install = PreparePatchPackageInstall{
+        var pkg_install: PackageInstall = .{
             .allocator = bun.default_allocator,
             .cache_dir = this.callback.apply.cache_dir,
             .cache_dir_subpath = this.callback.apply.cache_dir_subpath_without_patch_hash,
             .destination_dir_subpath = tempdir_name,
             .destination_dir_subpath_buf = tmpname_buf[0..],
-            .progress = .{},
+            .patch = null,
+            .progress = null,
             .package_name = pkg_name,
             .package_version = resolution_label,
             // dummy value
@@ -336,7 +309,7 @@ pub const PatchTask = struct {
             .lockfile = this.manager.lockfile,
         };
 
-        switch (pkg_install.installImpl(true, system_tmpdir, .copyfile, resolution_tag)) {
+        switch (pkg_install.install(true, system_tmpdir, .copyfile, resolution_tag)) {
             .success => {},
             .failure => |reason| {
                 return try log.addErrorFmtOpts(
@@ -350,7 +323,7 @@ pub const PatchTask = struct {
 
         {
             const patch_pkg_dir = switch (bun.sys.openat(
-                bun.toFD(system_tmpdir.fd),
+                .fromStdDir(system_tmpdir),
                 tempdir_name,
                 bun.O.RDONLY | bun.O.DIRECTORY,
                 0,
@@ -363,14 +336,14 @@ pub const PatchTask = struct {
                     .{resolution_label},
                 ),
             };
-            defer _ = bun.sys.close(patch_pkg_dir);
+            defer patch_pkg_dir.close();
 
             // 4. apply patch
             if (patchfile.apply(this.manager.allocator, patch_pkg_dir)) |e| {
                 return try log.addErrorFmtOpts(
                     this.manager.allocator,
-                    "failed applying patch file: {}",
-                    .{e.withoutPath()},
+                    "failed applying patch file: {f}",
+                    .{e},
                     .{},
                 );
             }
@@ -391,13 +364,13 @@ pub const PatchTask = struct {
                 .err => |e| {
                     return try log.addErrorFmtOpts(
                         this.manager.allocator,
-                        "failed adding bun tag: {}",
+                        "failed adding bun tag: {f}",
                         .{e.withPath(buntagbuf[0 .. bun_tag_prefix.len + hashlen :0])},
                         .{},
                     );
                 },
             };
-            _ = bun.sys.close(buntagfd);
+            buntagfd.close();
         }
 
         // 6. rename to cache dir
@@ -412,14 +385,14 @@ pub const PatchTask = struct {
         );
 
         if (bun.sys.renameatConcurrently(
-            bun.toFD(system_tmpdir.fd),
+            .fromStdDir(system_tmpdir),
             path_in_tmpdir,
-            bun.toFD(this.callback.apply.cache_dir.fd),
+            .fromStdDir(this.callback.apply.cache_dir),
             this.callback.apply.cache_dir_subpath,
             .{ .move_fallback = true },
         ).asErr()) |e| return try log.addErrorFmtOpts(
             this.manager.allocator,
-            "renaming changes to cache dir: {}",
+            "renaming changes to cache dir: {f}",
             .{e.withPath(this.callback.apply.cache_dir_subpath)},
             .{},
         );
@@ -445,13 +418,11 @@ pub const PatchTask = struct {
 
         const stat: bun.Stat = switch (bun.sys.stat(absolute_patchfile_path)) {
             .err => |e| {
-                if (e.getErrno() == bun.C.E.NOENT) {
-                    const fmt = "\n\n<r><red>error<r>: could not find patch file <b>{s}<r>\n\nPlease make sure it exists.\n\nTo create a new patch file run:\n\n  <cyan>bun patch {s}<r>\n";
-                    const args = .{
+                if (e.getErrno() == .NOENT) {
+                    bun.handleOom(log.addErrorFmt(null, Loc.Empty, this.manager.allocator, "Couldn't find patch file: '{s}'\n\nTo create a new patch file run:\n\n  <cyan>bun patch {s}<r>", .{
                         this.callback.calc_hash.patchfile_path,
                         this.manager.lockfile.patched_dependencies.get(this.callback.calc_hash.name_and_version_hash).?.path.slice(this.manager.lockfile.buffers.string_bytes.items),
-                    };
-                    log.addErrorFmt(null, Loc.Empty, this.manager.allocator, fmt, args) catch bun.outOfMemory();
+                    }));
                     return null;
                 }
                 log.addWarningFmt(
@@ -460,7 +431,7 @@ pub const PatchTask = struct {
                     this.manager.allocator,
                     "patchfile <b>{s}<r> is empty, please restore or delete it.",
                     .{absolute_patchfile_path},
-                ) catch bun.outOfMemory();
+                ) catch |err| bun.handleOom(err);
                 return null;
             },
             .result => |s| s,
@@ -471,9 +442,9 @@ pub const PatchTask = struct {
                 null,
                 Loc.Empty,
                 this.manager.allocator,
-                "patchfile <b>{s}<r> is empty, plese restore or delete it.",
+                "patchfile <b>{s}<r> is empty, please restore or delete it.",
                 .{absolute_patchfile_path},
-            ) catch bun.outOfMemory();
+            ) catch |err| bun.handleOom(err);
             return null;
         }
 
@@ -483,14 +454,14 @@ pub const PatchTask = struct {
                     null,
                     Loc.Empty,
                     this.manager.allocator,
-                    "failed to open patch file: {}",
+                    "failed to open patch file: {f}",
                     .{e},
-                ) catch bun.outOfMemory();
+                ) catch |err| bun.handleOom(err);
                 return null;
             },
             .result => |fd| fd,
         };
-        defer _ = bun.sys.close(fd);
+        defer fd.close();
 
         var hasher = bun.Wyhash11.init(0);
 
@@ -508,9 +479,9 @@ pub const PatchTask = struct {
                         null,
                         Loc.Empty,
                         this.manager.allocator,
-                        "failed to read from patch file: {} ({s})",
+                        "failed to read from patch file: {f} ({s})",
                         .{ e, absolute_patchfile_path },
-                    ) catch bun.outOfMemory();
+                    ) catch |err| bun.handleOom(err);
                     return null;
                 },
             };
@@ -537,10 +508,10 @@ pub const PatchTask = struct {
         state: ?CalcPatchHash.EnqueueAfterState,
     ) *PatchTask {
         const patchdep = manager.lockfile.patched_dependencies.get(name_and_version_hash) orelse @panic("This is a bug");
-        const patchfile_path = manager.allocator.dupeZ(u8, patchdep.path.slice(manager.lockfile.buffers.string_bytes.items)) catch bun.outOfMemory();
+        const patchfile_path = bun.handleOom(manager.allocator.dupeZ(u8, patchdep.path.slice(manager.lockfile.buffers.string_bytes.items)));
 
         const pt = bun.new(PatchTask, .{
-            .tempdir = manager.getTemporaryDirectory(),
+            .tempdir = manager.getTemporaryDirectory().handle,
             .callback = .{
                 .calc_hash = .{
                     .state = state,
@@ -574,10 +545,10 @@ pub const PatchTask = struct {
             patch_hash,
         );
 
-        const patchfilepath = pkg_manager.allocator.dupe(u8, pkg_manager.lockfile.patched_dependencies.get(name_and_version_hash).?.path.slice(pkg_manager.lockfile.buffers.string_bytes.items)) catch bun.outOfMemory();
+        const patchfilepath = bun.handleOom(pkg_manager.allocator.dupe(u8, pkg_manager.lockfile.patched_dependencies.get(name_and_version_hash).?.path.slice(pkg_manager.lockfile.buffers.string_bytes.items)));
 
         const pt = bun.new(PatchTask, .{
-            .tempdir = pkg_manager.getTemporaryDirectory(),
+            .tempdir = pkg_manager.getTemporaryDirectory().handle,
             .callback = .{
                 .apply = .{
                     .pkg_id = pkg_id,
@@ -590,8 +561,8 @@ pub const PatchTask = struct {
                     // need to dupe this as it's calculated using
                     // `PackageManager.cached_package_folder_name_buf` which may be
                     // modified
-                    .cache_dir_subpath = pkg_manager.allocator.dupeZ(u8, stuff.cache_dir_subpath) catch bun.outOfMemory(),
-                    .cache_dir_subpath_without_patch_hash = pkg_manager.allocator.dupeZ(u8, stuff.cache_dir_subpath[0 .. std.mem.indexOf(u8, stuff.cache_dir_subpath, "_patch_hash=") orelse @panic("This is a bug in Bun.")]) catch bun.outOfMemory(),
+                    .cache_dir_subpath = bun.handleOom(pkg_manager.allocator.dupeZ(u8, stuff.cache_dir_subpath)),
+                    .cache_dir_subpath_without_patch_hash = bun.handleOom(pkg_manager.allocator.dupeZ(u8, stuff.cache_dir_subpath[0 .. std.mem.indexOf(u8, stuff.cache_dir_subpath, "_patch_hash=") orelse @panic("This is a bug in Bun.")])),
                 },
             },
             .manager = pkg_manager,
@@ -601,3 +572,22 @@ pub const PatchTask = struct {
         return pt;
     }
 };
+
+const string = []const u8;
+const stringZ = [:0]const u8;
+
+const std = @import("std");
+
+const Fs = @import("../fs.zig");
+const FileSystem = Fs.FileSystem;
+
+const bun = @import("bun");
+const Global = bun.Global;
+const Output = bun.Output;
+const PackageManager = bun.PackageManager;
+const ThreadPool = bun.ThreadPool;
+const String = bun.Semver.String;
+const Task = bun.install.Task;
+
+const logger = bun.logger;
+const Loc = logger.Loc;

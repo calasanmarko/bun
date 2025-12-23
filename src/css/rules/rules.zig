@@ -1,20 +1,10 @@
-const std = @import("std");
 pub const css = @import("../css_parser.zig");
-const bun = @import("root").bun;
 
-const Error = css.Error;
-const ArrayList = std.ArrayListUnmanaged;
-const MediaList = css.MediaList;
 const CustomMedia = css.CustomMedia;
 const Printer = css.Printer;
-const Maybe = css.Maybe;
-const PrinterError = css.PrinterError;
 const PrintErr = css.PrintErr;
 const Dependency = css.Dependency;
 const dependencies = css.dependencies;
-const Url = css.css_values.url.Url;
-const Size2D = css.css_values.size.Size2D;
-const fontprops = css.css_properties.font;
 
 pub const import = @import("./import.zig");
 pub const layer = @import("./layer.zig");
@@ -39,7 +29,7 @@ pub const starting_style = @import("./starting_style.zig");
 
 pub const tailwind = @import("./tailwind.zig");
 
-const debug = bun.Output.scoped(.CSS_MINIFY, false);
+const debug = bun.Output.scoped(.CSS_MINIFY, .visible);
 
 pub fn CssRule(comptime Rule: type) type {
     return union(enum) {
@@ -92,30 +82,30 @@ pub fn CssRule(comptime Rule: type) type {
 
         const This = @This();
 
-        pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+        pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
             return switch (this.*) {
-                .media => |x| x.toCss(W, dest),
-                .import => |x| x.toCss(W, dest),
-                .style => |x| x.toCss(W, dest),
-                .keyframes => |x| x.toCss(W, dest),
-                .font_face => |x| x.toCss(W, dest),
-                .font_palette_values => |x| x.toCss(W, dest),
-                .page => |x| x.toCss(W, dest),
-                .supports => |x| x.toCss(W, dest),
-                .counter_style => |x| x.toCss(W, dest),
-                .namespace => |x| x.toCss(W, dest),
-                .moz_document => |x| x.toCss(W, dest),
-                .nesting => |x| x.toCss(W, dest),
-                .viewport => |x| x.toCss(W, dest),
-                .custom_media => |x| x.toCss(W, dest),
-                .layer_statement => |x| x.toCss(W, dest),
-                .layer_block => |x| x.toCss(W, dest),
-                .property => |x| x.toCss(W, dest),
-                .starting_style => |x| x.toCss(W, dest),
-                .container => |x| x.toCss(W, dest),
-                .scope => |x| x.toCss(W, dest),
-                .unknown => |x| x.toCss(W, dest),
-                .custom => |x| x.toCss(W, dest) catch return dest.addFmtError(),
+                .media => |x| x.toCss(dest),
+                .import => |x| x.toCss(dest),
+                .style => |x| x.toCss(dest),
+                .keyframes => |x| x.toCss(dest),
+                .font_face => |x| x.toCss(dest),
+                .font_palette_values => |x| x.toCss(dest),
+                .page => |x| x.toCss(dest),
+                .supports => |x| x.toCss(dest),
+                .counter_style => |x| x.toCss(dest),
+                .namespace => |x| x.toCss(dest),
+                .moz_document => |x| x.toCss(dest),
+                .nesting => |x| x.toCss(dest),
+                .viewport => |x| x.toCss(dest),
+                .custom_media => |x| x.toCss(dest),
+                .layer_statement => |x| x.toCss(dest),
+                .layer_block => |x| x.toCss(dest),
+                .property => |x| x.toCss(dest),
+                .starting_style => |x| x.toCss(dest),
+                .container => |x| x.toCss(dest),
+                .scope => |x| x.toCss(dest),
+                .unknown => |x| x.toCss(dest),
+                .custom => |x| x.toCss(dest) catch return dest.addFmtError(),
                 .ignored => {},
             };
         }
@@ -182,12 +172,12 @@ pub fn CssRuleList(comptime AtRule: type) type {
                         // }
 
                         // keyframez.vendor_prefix = context.targets.prefixes(keyframez.vendor_prefix, css.prefixes.Feature.at_keyframes);
-                        // keyframe_rules.put(context.allocator, keyframez.name, rules.items.len) catch bun.outOfMemory();
+                        // bun.handleOom(keyframe_rules.put(context.allocator, keyframez.name, rules.items.len));
 
                         // const fallbacks = keyframez.getFallbacks(AtRule, context.targets);
                         // moved_rule = true;
-                        // rules.append(context.allocator, rule.*) catch bun.outOfMemory();
-                        // rules.appendSlice(context.allocator, fallbacks) catch bun.outOfMemory();
+                        // bun.handleOom(rules.append(context.allocator, rule.*));
+                        // bun.handleOom(rules.appendSlice(context.allocator, fallbacks));
                         // continue;
                         debug("TODO: KeyframesRule", .{});
                     },
@@ -201,7 +191,7 @@ pub fn CssRuleList(comptime AtRule: type) type {
                         if (rules.items.len > 0 and rules.items[rules.items.len - 1] == .media) {
                             var last_rule = &rules.items[rules.items.len - 1].media;
                             if (last_rule.query.eql(&med.query)) {
-                                last_rule.rules.v.appendSlice(context.allocator, med.rules.v.items) catch bun.outOfMemory();
+                                bun.handleOom(last_rule.rules.v.appendSlice(context.allocator, med.rules.v.items));
                                 _ = try last_rule.minify(context, parent_is_unused);
                                 continue;
                             }
@@ -226,8 +216,8 @@ pub fn CssRuleList(comptime AtRule: type) type {
                         debug("TODO: ContainerRule", .{});
                     },
                     .layer_block => |*lay| {
-                        _ = lay; // autofix
-                        debug("TODO: LayerBlockRule", .{});
+                        try lay.rules.minify(context, parent_is_unused);
+                        if (lay.rules.v.items.len == 0) continue;
                     },
                     .layer_statement => |*lay| {
                         _ = lay; // autofix
@@ -241,7 +231,7 @@ pub fn CssRuleList(comptime AtRule: type) type {
                         const Selector = css.selector.Selector;
                         const SelectorList = css.selector.SelectorList;
                         const Component = css.selector.Component;
-                        debug("Input style:\n  Selectors: {}\n  Decls: {}\n", .{ sty.selectors.debug(), sty.declarations.debug() });
+                        debug("Input style:\n  Selectors: {f}\n  Decls: {f}\n", .{ sty.selectors.debug(), sty.declarations.debug() });
                         if (parent_is_unused or try sty.minify(context, parent_is_unused)) {
                             continue;
                         }
@@ -382,7 +372,7 @@ pub fn CssRuleList(comptime AtRule: type) type {
                             const has_no_rules = sty.rules.v.items.len == 0;
                             const idx = rules.items.len;
 
-                            rules.append(context.allocator, rule.*) catch bun.outOfMemory();
+                            bun.handleOom(rules.append(context.allocator, rule.*));
                             moved_rule = true;
 
                             // Check if this rule is a duplicate of an earlier rule, meaning it has
@@ -404,32 +394,32 @@ pub fn CssRuleList(comptime AtRule: type) type {
                                     }
                                 }
 
-                                style_rules.put(context.allocator, key, idx) catch bun.outOfMemory();
+                                bun.handleOom(style_rules.put(context.allocator, key, idx));
                             }
                         }
 
                         if (logical.items.len > 0) {
                             if (bun.Environment.isDebug and logical.items[0] == .style) {
-                                debug("Adding logical: {}\n", .{logical.items[0].style.selectors.debug()});
+                                debug("Adding logical: {f}\n", .{logical.items[0].style.selectors.debug()});
                             }
                             var log = CssRuleList(AtRule){ .v = logical };
                             try log.minify(context, parent_is_unused);
-                            rules.appendSlice(context.allocator, log.v.items) catch bun.outOfMemory();
+                            bun.handleOom(rules.appendSlice(context.allocator, log.v.items));
                         }
-                        rules.appendSlice(context.allocator, supps.items) catch bun.outOfMemory();
+                        bun.handleOom(rules.appendSlice(context.allocator, supps.items));
                         for (incompatible_rules.slice_mut()) |incompatible_entry| {
                             if (!incompatible_entry.rule.isEmpty()) {
-                                rules.append(context.allocator, .{ .style = incompatible_entry.rule }) catch bun.outOfMemory();
+                                bun.handleOom(rules.append(context.allocator, .{ .style = incompatible_entry.rule }));
                             }
                             if (incompatible_entry.logical.items.len > 0) {
                                 var log = CssRuleList(AtRule){ .v = incompatible_entry.logical };
                                 try log.minify(context, parent_is_unused);
-                                rules.appendSlice(context.allocator, log.v.items) catch bun.outOfMemory();
+                                bun.handleOom(rules.appendSlice(context.allocator, log.v.items));
                             }
-                            rules.appendSlice(context.allocator, incompatible_entry.supports.items) catch bun.outOfMemory();
+                            bun.handleOom(rules.appendSlice(context.allocator, incompatible_entry.supports.items));
                         }
                         if (nested_rule) |nested| {
-                            rules.append(context.allocator, .{ .style = nested }) catch bun.outOfMemory();
+                            bun.handleOom(rules.append(context.allocator, .{ .style = nested }));
                         }
 
                         continue;
@@ -461,7 +451,7 @@ pub fn CssRuleList(comptime AtRule: type) type {
                     else => {},
                 }
 
-                rules.append(context.allocator, rule.*) catch bun.outOfMemory();
+                bun.handleOom(rules.append(context.allocator, rule.*));
             }
 
             // MISSING SHIT HERE
@@ -471,7 +461,7 @@ pub fn CssRuleList(comptime AtRule: type) type {
             return;
         }
 
-        pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+        pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
             var first = true;
             var last_without_block = false;
 
@@ -482,7 +472,7 @@ pub fn CssRuleList(comptime AtRule: type) type {
                 if (rule.* == .import) {
                     if (dest.remove_imports) {
                         const dep = if (dest.dependencies != null) Dependency{
-                            .import = dependencies.ImportDependency.new(dest.allocator, &rule.import, dest.filename()),
+                            .import = dependencies.ImportDependency.new(dest.allocator, &rule.import, dest.filename(), dest.local_names, dest.symbols),
                         } else null;
 
                         if (dest.dependencies) |*deps| {
@@ -497,13 +487,13 @@ pub fn CssRuleList(comptime AtRule: type) type {
                 } else {
                     if (!dest.minify and
                         !(last_without_block and
-                        (rule.* == .import or rule.* == .namespace or rule.* == .layer_statement)))
+                            (rule.* == .import or rule.* == .namespace or rule.* == .layer_statement)))
                     {
                         try dest.writeChar('\n');
                     }
                     try dest.newline();
                 }
-                try rule.toCss(W, dest);
+                try rule.toCss(dest);
                 last_without_block = rule.* == .import or rule.* == .namespace or rule.* == .layer_statement;
             }
         }
@@ -523,6 +513,7 @@ pub const MinifyContext = struct {
     handler_context: css.PropertyHandlerContext,
     unused_symbols: *const std.StringArrayHashMapUnmanaged(void),
     custom_media: ?std.StringArrayHashMapUnmanaged(custom_media.CustomMediaRule),
+    extra: *const css.StylesheetExtra,
     css_modules: bool,
     err: ?css.MinifyError = null,
 };
@@ -612,6 +603,7 @@ fn mergeStyleRules(
     context: *MinifyContext,
 ) bool {
     // Merge declarations if the selectors are equivalent, and both are compatible with all targets.
+    // Does not apply if css modules are enabled
     if (sty.selectors.eql(&last_style_rule.selectors) and
         sty.isCompatible(context.targets.*) and
         last_style_rule.isCompatible(context.targets.*) and
@@ -622,13 +614,13 @@ fn mergeStyleRules(
         last_style_rule.declarations.declarations.appendSlice(
             context.allocator,
             sty.declarations.declarations.items,
-        ) catch bun.outOfMemory();
+        ) catch |err| bun.handleOom(err);
         sty.declarations.declarations.clearRetainingCapacity();
 
         last_style_rule.declarations.important_declarations.appendSlice(
             context.allocator,
             sty.declarations.important_declarations.items,
-        ) catch bun.outOfMemory();
+        ) catch |err| bun.handleOom(err);
         sty.declarations.important_declarations.clearRetainingCapacity();
 
         last_style_rule.declarations.minify(
@@ -649,10 +641,10 @@ fn mergeStyleRules(
         {
             // If the new rule is unprefixed, replace the prefixes of the last rule.
             // Otherwise, add the new prefix.
-            if (sty.vendor_prefix.contains(css.VendorPrefix{ .none = true }) and context.targets.shouldCompileSelectors()) {
+            if (sty.vendor_prefix.none and context.targets.shouldCompileSelectors()) {
                 last_style_rule.vendor_prefix = sty.vendor_prefix;
             } else {
-                last_style_rule.vendor_prefix.insert(sty.vendor_prefix);
+                bun.bits.insert(css.VendorPrefix, &last_style_rule.vendor_prefix, sty.vendor_prefix);
             }
             return true;
         }
@@ -664,13 +656,18 @@ fn mergeStyleRules(
                 sty.selectors.v.slice(),
             );
             sty.selectors.v.clearRetainingCapacity();
-            if (sty.vendor_prefix.contains(css.VendorPrefix{ .none = true }) and context.targets.shouldCompileSelectors()) {
+            if (sty.vendor_prefix.none and context.targets.shouldCompileSelectors()) {
                 last_style_rule.vendor_prefix = sty.vendor_prefix;
             } else {
-                last_style_rule.vendor_prefix.insert(sty.vendor_prefix);
+                bun.bits.insert(css.VendorPrefix, &last_style_rule.vendor_prefix, sty.vendor_prefix);
             }
             return true;
         }
     }
     return false;
 }
+
+const bun = @import("bun");
+
+const std = @import("std");
+const ArrayList = std.ArrayListUnmanaged;

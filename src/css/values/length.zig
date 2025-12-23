@@ -1,13 +1,8 @@
-const std = @import("std");
-const Allocator = std.mem.Allocator;
-const bun = @import("root").bun;
 pub const css = @import("../css_parser.zig");
 const Result = css.Result;
-const ArrayList = std.ArrayListUnmanaged;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
 const CSSNumber = css.css_values.number.CSSNumber;
-const CSSNumberFns = css.css_values.number.CSSNumberFns;
 const Calc = css.css_values.calc.Calc;
 const MathFunction = css.css_values.calc.MathFunction;
 const DimensionPercentage = css.css_values.percentage.DimensionPercentage;
@@ -19,8 +14,8 @@ pub const LengthOrNumber = union(enum) {
     /// A length.
     length: Length,
 
-    pub usingnamespace css.DeriveParse(@This());
-    pub usingnamespace css.DeriveToCss(@This());
+    pub const parse = css.DeriveParse(@This()).parse;
+    pub const toCss = css.DeriveToCss(@This()).toCss;
 
     pub fn deinit(this: *const LengthOrNumber, allocator: std.mem.Allocator) void {
         switch (this.*) {
@@ -57,8 +52,8 @@ pub const LengthPercentageOrAuto = union(enum) {
     /// A [`<length-percentage>`](https://www.w3.org/TR/css-values-4/#typedef-length-percentage).
     length: LengthPercentage,
 
-    pub usingnamespace css.DeriveParse(@This());
-    pub usingnamespace css.DeriveToCss(@This());
+    pub const parse = css.DeriveParse(@This()).parse;
+    pub const toCss = css.DeriveToCss(@This()).toCss;
 
     pub fn isCompatible(this: *const @This(), browsers: css.targets.Browsers) bool {
         return switch (this.*) {
@@ -287,7 +282,7 @@ pub const LengthValue = union(enum) {
         return .{ .err = location.newUnexpectedTokenError(token.*) };
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *css.Printer) css.PrintErr!void {
         const value, const unit = this.toUnitValue();
 
         // The unit can be omitted if the value is zero, except inside calc()
@@ -296,7 +291,7 @@ pub const LengthValue = union(enum) {
             return dest.writeChar('0');
         }
 
-        return css.serializer.serializeDimension(value, unit, W, dest);
+        return css.serializer.serializeDimension(value, unit, dest);
     }
 
     pub fn isZero(this: *const LengthValue) bool {
@@ -566,10 +561,10 @@ pub const Length = union(enum) {
         return .{ .result = .{ .value = len } };
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *Printer) PrintErr!void {
         return switch (this.*) {
-            .value => |a| a.toCss(W, dest),
-            .calc => |c| c.toCss(W, dest),
+            .value => |a| a.toCss(dest),
+            .calc => |c| c.toCss(dest),
         };
     }
 
@@ -641,28 +636,10 @@ pub const Length = union(enum) {
             std.mem.swap(Length, &a, &b);
         }
 
-        if (a == .calc and b == .calc) {
-            return Length{ .calc = bun.create(allocator, Calc(Length), a.calc.add(allocator, b.calc.*)) };
-        } else if (a == .calc) {
-            switch (a.calc.*) {
-                .value => |v| return v.add__(allocator, b),
-                else => return Length{ .calc = bun.create(allocator, Calc(Length), Calc(Length){
-                    .sum = .{
-                        .left = bun.create(allocator, Calc(Length), a.calc.*),
-                        .right = bun.create(allocator, Calc(Length), b.intoCalc(allocator)),
-                    },
-                }) },
-            }
-        } else if (b == .calc) {
-            switch (b.calc.*) {
-                .value => |v| return a.add__(allocator, v.*),
-                else => return Length{ .calc = bun.create(allocator, Calc(Length), Calc(Length){
-                    .sum = .{
-                        .left = bun.create(allocator, Calc(Length), a.intoCalc(allocator)),
-                        .right = bun.create(allocator, Calc(Length), b.calc.*),
-                    },
-                }) },
-            }
+        if (a == .calc and a.calc.* == .value and b != .calc) {
+            return a.calc.value.add__(allocator, b);
+        } else if (b == .calc and b.calc.* == .value and a != .calc) {
+            return a.add__(allocator, b.calc.value.*);
         } else {
             return Length{ .calc = bun.create(allocator, Calc(Length), Calc(Length){
                 .sum = .{
@@ -814,3 +791,7 @@ pub const Length = union(enum) {
         };
     }
 };
+
+const bun = @import("bun");
+const std = @import("std");
+const Allocator = std.mem.Allocator;

@@ -16,8 +16,8 @@ const ObjectKeys = Object.keys;
 const ObjectDefineProperties = Object.defineProperties;
 const ObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 
-function Duplex(options) {
-  if (!(this instanceof Duplex)) return Reflect.construct(Duplex, [options]);
+function Duplex(options): void {
+  if (!(this instanceof Duplex)) return new Duplex(options);
 
   this._events ??= {
     close: undefined,
@@ -150,4 +150,4 @@ Duplex.from = function (body) {
   return duplexify(body, "body");
 };
 
-export default Duplex;
+export default Duplex as unknown as typeof import("node:stream").Duplex;

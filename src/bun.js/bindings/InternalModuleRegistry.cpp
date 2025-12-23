@@ -12,6 +12,7 @@
 #include "InternalModuleRegistryConstants.h"
 #include "wtf/Forward.h"
 
+#include "NativeModuleImpl.h"
 namespace Bun {
 
 extern "C" bool BunTest__shouldGenerateCodeCoverage(BunString sourceURL);
@@ -36,9 +37,7 @@ JSC::JSValue generateModule(JSC::JSGlobalObject* globalObject, JSC::VM& vm, cons
 {
     auto throwScope = DECLARE_THROW_SCOPE(vm);
     auto&& origin = SourceOrigin(WTF::URL(urlString));
-    SourceCode source = JSC::makeSource(SOURCE, origin,
-        JSC::SourceTaintedOrigin::Untainted,
-        moduleName);
+    SourceCode source = JSC::makeSource(SOURCE, origin, JSC::SourceTaintedOrigin::Untainted, moduleName);
     maybeAddCodeCoverage(vm, source);
     JSFunction* func
         = JSFunction::create(
@@ -54,7 +53,7 @@ JSC::JSValue generateModule(JSC::JSGlobalObject* globalObject, JSC::VM& vm, cons
             static_cast<JSC::JSGlobalObject*>(globalObject));
 
     RETURN_IF_EXCEPTION(throwScope, {});
-    if (UNLIKELY(globalObject->hasDebugger() && globalObject->debugger()->isInteractivelyDebugging())) {
+    if (globalObject->hasDebugger() && globalObject->debugger()->isInteractivelyDebugging()) [[unlikely]] {
         globalObject->debugger()->sourceParsed(globalObject, source.provider(), -1, ""_s);
     }
 
@@ -70,17 +69,36 @@ JSC::JSValue generateModule(JSC::JSGlobalObject* globalObject, JSC::VM& vm, cons
     ASSERT(
         result && result.isCell() && jsDynamicCast<JSObject*>(result),
         "Expected \"%s\" to export a JSObject. Bun is going to crash.",
-        moduleName.utf8().data());
+        moduleName.utf8().span().data());
     return result;
 }
 
+ALWAYS_INLINE JSC::JSValue generateNativeModule(
+    JSC::JSGlobalObject* globalObject,
+    JSC::VM& vm,
+    const SyntheticSourceProvider::SyntheticSourceGenerator& generator)
+{
+    Vector<JSC::Identifier, 4> propertyNames;
+    JSC::MarkedArgumentBuffer arguments;
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
+    generator(
+        globalObject,
+        JSC::Identifier::EmptyIdentifier, // Our generators do not do anything with the key
+        propertyNames,
+        arguments);
+    RETURN_IF_EXCEPTION(throwScope, {});
+    // This goes off of the assumption that you only call this `evaluate` using a generator that explicitly
+    // assigns the `default` export first.
+    ASSERT_WITH_MESSAGE(
+        propertyNames.at(0) == vm.propertyNames->defaultKeyword,
+        "The native module must export a default value first.");
+    JSValue defaultValue = arguments.at(0);
+    ASSERT(defaultValue);
+    return defaultValue;
+}
+
 #ifdef BUN_DYNAMIC_JS_LOAD_PATH
-JSValue initializeInternalModuleFromDisk(
-    JSGlobalObject* globalObject,
-    VM& vm,
-    const WTF::String& moduleName,
-    WTF::String fileBase,
-    const WTF::String& urlString)
+JSValue initializeInternalModuleFromDisk(JSGlobalObject* globalObject, VM& vm, const WTF::String& moduleName, WTF::String fileBase, const WTF::String& urlString)
 {
     WTF::String file = makeString(ASCIILiteral::fromLiteralUnsafe(BUN_DYNAMIC_JS_LOAD_PATH), "/"_s, WTFMove(fileBase));
     if (auto contents = WTF::FileSystemImpl::readEntireFile(file)) {
@@ -89,7 +107,7 @@ JSValue initializeInternalModuleFromDisk(
     } else {
         printf("\nFATAL: bun-debug failed to load bundled version of \"%s\" at \"%s\" (was it deleted?)\n"
                "Please re-compile Bun to continue.\n\n",
-            moduleName.utf8().data(), file.utf8().data());
+            moduleName.utf8().span().data(), file.utf8().span().data());
         CRASH();
     }
 }
@@ -106,6 +124,11 @@ const ClassInfo InternalModuleRegistry::s_info = { "InternalModuleRegistry"_s, &
 InternalModuleRegistry::InternalModuleRegistry(VM& vm, Structure* structure)
     : Base(vm, structure)
 {
+    // Initialize all internal fields to jsUndefined() using setWithoutWriteBarrier
+    // to avoid triggering write barriers during construction
+    for (uint8_t i = 0; i < BUN_INTERNAL_MODULE_COUNT; i++) {
+        this->internalField(static_cast<Field>(i)).setWithoutWriteBarrier(jsUndefined());
+    }
 }
 
 template<typename Visitor>
@@ -129,10 +152,6 @@ void InternalModuleRegistry::finishCreation(VM& vm)
 {
     Base::finishCreation(vm);
     ASSERT(inherits(info()));
-
-    for (uint8_t i = 0; i < BUN_INTERNAL_MODULE_COUNT; i++) {
-        this->internalField(static_cast<Field>(i)).set(vm, this, jsUndefined());
-    }
 }
 
 Structure* InternalModuleRegistry::createStructure(VM& vm, JSGlobalObject* globalObject)
@@ -142,9 +161,12 @@ Structure* InternalModuleRegistry::createStructure(VM& vm, JSGlobalObject* globa
 
 JSValue InternalModuleRegistry::requireId(JSGlobalObject* globalObject, VM& vm, Field id)
 {
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
+
     auto value = internalField(id).get();
     if (!value || value.isUndefined()) {
         value = createInternalModuleById(globalObject, vm, id);
+        RETURN_IF_EXCEPTION(throwScope, {});
         internalField(id).set(vm, this, value);
     }
     return value;

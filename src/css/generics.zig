@@ -1,31 +1,3 @@
-const std = @import("std");
-const Allocator = std.mem.Allocator;
-const bun = @import("root").bun;
-const logger = bun.logger;
-const Log = logger.Log;
-
-const ArrayList = std.ArrayListUnmanaged;
-
-const css = @import("./css_parser.zig");
-const css_values = css.css_values;
-
-const Parser = css.Parser;
-const ParserOptions = css.ParserOptions;
-const Result = css.Result;
-const Printer = css.Printer;
-const PrintErr = css.PrintErr;
-const CSSNumber = css.CSSNumber;
-const CSSNumberFns = css.CSSNumberFns;
-const CSSInteger = css.CSSInteger;
-const CSSIntegerFns = css.CSSIntegerFns;
-const CustomIdent = css.CustomIdent;
-const CustomIdentFns = css.CustomIdentFns;
-const DashedIdent = css.DashedIdent;
-const DashedIdentFns = css.DashedIdentFns;
-const Ident = css.Ident;
-const IdentFns = css.IdentFns;
-const VendorPrefix = css.VendorPrefix;
-
 pub inline fn implementDeepClone(comptime T: type, this: *const T, allocator: Allocator) T {
     const tyinfo = @typeInfo(T);
 
@@ -42,6 +14,10 @@ pub inline fn implementDeepClone(comptime T: type, this: *const T, allocator: Al
     }
 
     if (comptime T == []const u8) {
+        return this.*;
+    }
+
+    if (comptime T == bun.logger.Loc) {
         return this.*;
     }
 
@@ -108,6 +84,9 @@ pub fn implementEql(comptime T: type, this: *const T, other: *const T) bool {
     }
     if (comptime T == VendorPrefix) {
         return VendorPrefix.eql(this.*, other.*);
+    }
+    if (comptime T == bun.logger.Loc) {
+        return this.*.start == other.*.start;
     }
     return switch (tyinfo) {
         .optional => @compileError("Handled above, this means Zack wrote a bug."),
@@ -355,35 +334,35 @@ pub fn hasToCss(comptime T: type) bool {
     };
 }
 
-pub inline fn toCss(comptime T: type, this: *const T, comptime W: type, dest: *Printer(W)) PrintErr!void {
+pub inline fn toCss(comptime T: type, this: *const T, dest: *Printer) PrintErr!void {
     if (@typeInfo(T) == .pointer) {
         const TT = std.meta.Child(T);
-        return toCss(TT, this.*, W, dest);
+        return toCss(TT, this.*, dest);
     }
     if (@typeInfo(T) == .optional) {
         const TT = std.meta.Child(T);
 
         if (this.*) |*val| {
-            return toCss(TT, val, W, dest);
+            return toCss(TT, val, dest);
         }
         return;
     }
     if (comptime bun.meta.looksLikeListContainerType(T)) |result| {
         switch (result.list) {
             .array_list => {
-                return css.to_css.fromList(result.child, this.items, W, dest);
+                return css.to_css.fromList(result.child, this.items, dest);
             },
             .baby_list => @compileError("TODO"),
             .small_list => @compileError("TODO"),
         }
     }
     return switch (T) {
-        f32 => CSSNumberFns.toCss(this, W, dest),
-        CSSInteger => CSSIntegerFns.toCss(this, W, dest),
-        CustomIdent => CustomIdentFns.toCss(this, W, dest),
-        DashedIdent => DashedIdentFns.toCss(this, W, dest),
-        Ident => IdentFns.toCss(this, W, dest),
-        else => T.toCss(this, W, dest),
+        f32 => CSSNumberFns.toCss(this, dest),
+        CSSInteger => CSSIntegerFns.toCss(this, dest),
+        CustomIdent => CustomIdentFns.toCss(this, dest),
+        DashedIdent => DashedIdentFns.toCss(this, dest),
+        Ident => IdentFns.toCss(this, dest),
+        else => T.toCss(this, dest),
     };
 }
 
@@ -444,8 +423,11 @@ pub inline fn eql(comptime T: type, lhs: *const T, rhs: *const T) bool {
         CSSInteger => lhs.* == rhs.*,
         CustomIdent, DashedIdent, Ident => bun.strings.eql(lhs.v, rhs.v),
         []const u8 => bun.strings.eql(lhs.*, rhs.*),
-        // css.VendorPrefix => css.VendorPrefix.eq(lhs.*, rhs.*),
-        else => T.eql(lhs, rhs),
+        bun.logger.Loc => lhs.eql(rhs.*),
+        else => if (@typeInfo(T) == .@"struct" and @typeInfo(T).@"struct".layout == .@"packed")
+            lhs.* == rhs.*
+        else
+            T.eql(lhs, rhs),
     };
 }
 
@@ -464,7 +446,7 @@ pub inline fn deepClone(comptime T: type, this: *const T, allocator: Allocator) 
             return bun.create(allocator, TT, deepClone(TT, this.*, allocator));
         }
         if (comptime tyinfo.pointer.size == .slice) {
-            var slc = allocator.alloc(tyinfo.pointer.child, this.len) catch bun.outOfMemory();
+            var slc = bun.handleOom(allocator.alloc(tyinfo.pointer.child, this.len));
             if (comptime bun.meta.isSimpleCopyType(tyinfo.pointer.child) or tyinfo.pointer.child == []const u8) {
                 @memcpy(slc, this.*);
             } else {
@@ -487,9 +469,7 @@ pub inline fn deepClone(comptime T: type, this: *const T, allocator: Allocator) 
     if (comptime bun.meta.looksLikeListContainerType(T)) |result| {
         return switch (result.list) {
             .array_list => css.deepClone(result.child, allocator, this),
-            .baby_list => {
-                return bun.BabyList(result.child).deepClone2(this, allocator);
-            },
+            .baby_list => this.deepCloneInfallible(allocator),
             .small_list => this.deepClone(allocator),
         };
     }
@@ -503,10 +483,9 @@ pub inline fn deepClone(comptime T: type, this: *const T, allocator: Allocator) 
         @compileError(@typeName(T) ++ " does not have a deepClone() function");
     }
 
-    return T.deepClone(this, allocator);
+    return this.deepClone(allocator);
 }
 
-const Angle = css_values.angle.Angle;
 pub inline fn tryFromAngle(comptime T: type, angle: Angle) ?T {
     return switch (T) {
         CSSNumber => CSSNumberFns.tryFromAngle(angle),
@@ -666,3 +645,30 @@ pub fn hash(comptime T: type, this: *const T, hasher: *std.hash.Wyhash) void {
         else => T.hash(this, hasher),
     };
 }
+
+const css = @import("./css_parser.zig");
+const CSSInteger = css.CSSInteger;
+const CSSIntegerFns = css.CSSIntegerFns;
+const CSSNumber = css.CSSNumber;
+const CSSNumberFns = css.CSSNumberFns;
+const CustomIdent = css.CustomIdent;
+const CustomIdentFns = css.CustomIdentFns;
+const DashedIdent = css.DashedIdent;
+const DashedIdentFns = css.DashedIdentFns;
+const Ident = css.Ident;
+const IdentFns = css.IdentFns;
+const Parser = css.Parser;
+const ParserOptions = css.ParserOptions;
+const PrintErr = css.PrintErr;
+const Printer = css.Printer;
+const Result = css.Result;
+const VendorPrefix = css.VendorPrefix;
+const css_values = css.css_values;
+const Angle = css_values.angle.Angle;
+
+const bun = @import("bun");
+const logger = bun.logger;
+
+const std = @import("std");
+const ArrayList = std.ArrayListUnmanaged;
+const Allocator = std.mem.Allocator;

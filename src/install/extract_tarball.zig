@@ -1,25 +1,3 @@
-const bun = @import("root").bun;
-const default_allocator = bun.default_allocator;
-const Global = bun.Global;
-const json_parser = bun.JSON;
-const logger = bun.logger;
-const Output = bun.Output;
-const FileSystem = @import("../fs.zig").FileSystem;
-const Install = @import("./install.zig");
-const DependencyID = Install.DependencyID;
-const PackageManager = Install.PackageManager;
-const Integrity = @import("./integrity.zig").Integrity;
-const Npm = @import("./npm.zig");
-const Resolution = @import("./resolution.zig").Resolution;
-const Semver = bun.Semver;
-const std = @import("std");
-const string = @import("../string_types.zig").string;
-const strings = @import("../string_immutable.zig");
-const Path = @import("../resolver/resolve_path.zig");
-const Environment = bun.Environment;
-const w = std.os.windows;
-const OOM = bun.OOM;
-
 const ExtractTarball = @This();
 
 name: strings.StringOrTinyString,
@@ -32,20 +10,20 @@ integrity: Integrity = .{},
 url: strings.StringOrTinyString,
 package_manager: *PackageManager,
 
-pub inline fn run(this: *const ExtractTarball, bytes: []const u8) !Install.ExtractData {
+pub inline fn run(this: *const ExtractTarball, log: *logger.Log, bytes: []const u8) !Install.ExtractData {
     if (!this.skip_verify and this.integrity.tag.isSupported()) {
         if (!this.integrity.verify(bytes)) {
-            this.package_manager.log.addErrorFmt(
+            log.addErrorFmt(
                 null,
                 logger.Loc.Empty,
-                this.package_manager.allocator,
+                bun.default_allocator,
                 "Integrity check failed<r> for tarball: {s}",
                 .{this.name.slice()},
             ) catch unreachable;
             return error.IntegrityCheckFailed;
         }
     }
-    return this.extract(bytes);
+    return this.extract(log, bytes);
 }
 
 pub fn buildURL(
@@ -127,7 +105,10 @@ threadlocal var final_path_buf: bun.PathBuffer = undefined;
 threadlocal var folder_name_buf: bun.PathBuffer = undefined;
 threadlocal var json_path_buf: bun.PathBuffer = undefined;
 
-fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractData {
+fn extract(this: *const ExtractTarball, log: *logger.Log, tgz_bytes: []const u8) !Install.ExtractData {
+    const tracer = bun.perf.trace("ExtractTarball.extract");
+    defer tracer.end();
+
     const tmpdir = this.temp_dir;
     var tmpname_buf: if (Environment.isWindows) bun.WPathBuffer else bun.PathBuffer = undefined;
     const name = if (this.name.slice().len > 0) this.name.slice() else brk: {
@@ -139,7 +120,17 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
     };
     const basename = brk: {
         var tmp = name;
-        if (tmp[0] == '@') {
+
+        // Handle URLs - extract just the filename from the URL
+        if (strings.hasPrefixComptime(tmp, "https://") or strings.hasPrefixComptime(tmp, "http://")) {
+            tmp = std.fs.path.basename(tmp);
+            // Remove .tgz or .tar.gz extension if present
+            if (strings.endsWithComptime(tmp, ".tgz")) {
+                tmp = tmp[0 .. tmp.len - 4];
+            } else if (strings.endsWithComptime(tmp, ".tar.gz")) {
+                tmp = tmp[0 .. tmp.len - 7];
+            }
+        } else if (tmp[0] == '@') {
             if (strings.indexOfChar(tmp, '/')) |i| {
                 tmp = tmp[i + 1 ..];
             }
@@ -155,13 +146,13 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
     };
 
     var resolved: string = "";
-    const tmpname = try FileSystem.instance.tmpname(basename[0..@min(basename.len, 32)], std.mem.asBytes(&tmpname_buf), bun.fastRandom());
+    const tmpname = try FileSystem.tmpname(basename[0..@min(basename.len, 32)], std.mem.asBytes(&tmpname_buf), bun.fastRandom());
     {
-        var extract_destination = bun.MakePath.makeOpenPath(tmpdir, bun.span(tmpname), .{}) catch |err| {
-            this.package_manager.log.addErrorFmt(
+        var extract_destination = bun.MakePath.makeOpenPath(tmpdir, tmpname, .{}) catch |err| {
+            log.addErrorFmt(
                 null,
                 logger.Loc.Empty,
-                this.package_manager.allocator,
+                bun.default_allocator,
                 "{s} when create temporary directory named \"{s}\" (while extracting \"{s}\")",
                 .{ @errorName(err), tmpname, name },
             ) catch unreachable;
@@ -178,7 +169,7 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
 
         var esimated_output_size: usize = 0;
 
-        const time_started_for_verbose_logs: u64 = if (PackageManager.verbose_install) bun.getRoughTickCount().ns() else 0;
+        const time_started_for_verbose_logs: u64 = if (PackageManager.verbose_install) bun.getRoughTickCount(.allow_mocked_time).ns() else 0;
 
         {
             // Last 4 bytes of a gzip-compressed file are the uncompressed size.
@@ -216,22 +207,22 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
         if (needs_to_decompress) {
             zlib_pool.data.list.clearRetainingCapacity();
             var zlib_entry = try Zlib.ZlibReaderArrayList.init(tgz_bytes, &zlib_pool.data.list, default_allocator);
-            zlib_entry.readAll() catch |err| {
-                this.package_manager.log.addErrorFmt(
+            zlib_entry.readAll(true) catch |err| {
+                log.addErrorFmt(
                     null,
                     logger.Loc.Empty,
-                    this.package_manager.allocator,
-                    "{s} decompressing \"{s}\" to \"{}\"",
-                    .{ @errorName(err), name, bun.fmt.fmtPath(u8, std.mem.span(tmpname), .{}) },
+                    bun.default_allocator,
+                    "{s} decompressing \"{s}\" to \"{f}\"",
+                    .{ @errorName(err), name, bun.fmt.fmtPath(u8, tmpname, .{}) },
                 ) catch unreachable;
                 return error.InstallFailed;
             };
         }
 
         if (PackageManager.verbose_install) {
-            const decompressing_ended_at: u64 = bun.getRoughTickCount().ns();
+            const decompressing_ended_at: u64 = bun.getRoughTickCount(.allow_mocked_time).ns();
             const elapsed = decompressing_ended_at - time_started_for_verbose_logs;
-            Output.prettyErrorln("[{s}] Extract {s}<r> (decompressed {} tgz file in {})", .{ name, tmpname, bun.fmt.size(tgz_bytes.len, .{}), std.fmt.fmtDuration(elapsed) });
+            Output.prettyErrorln("[{s}] Extract {s}<r> (decompressed {f} tgz file in {D})", .{ name, tmpname, bun.fmt.size(tgz_bytes.len, .{}), elapsed });
         }
 
         switch (this.resolution.tag) {
@@ -248,7 +239,7 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
                 var dirname_reader = DirnameReader{ .outdirname = &resolved };
 
                 switch (PackageManager.verbose_install) {
-                    inline else => |log| _ = try Archiver.extractToDir(
+                    inline else => |verbose_log| _ = try Archiver.extractToDir(
                         zlib_pool.data.list.items,
                         extract_destination,
                         null,
@@ -257,7 +248,7 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
                         .{
                             // for GitHub tarballs, the root dir is always <user>-<repo>-<commit_id>
                             .depth_to_skip = 1,
-                            .log = log,
+                            .log = verbose_log,
                         },
                     ),
                 }
@@ -274,14 +265,14 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
                 }
             },
             else => switch (PackageManager.verbose_install) {
-                inline else => |log| _ = try Archiver.extractToDir(
+                inline else => |verbose_log| _ = try Archiver.extractToDir(
                     zlib_pool.data.list.items,
                     extract_destination,
                     null,
                     void,
                     {},
                     .{
-                        .log = log,
+                        .log = verbose_log,
                         // packages usually have root directory `package/`, and scoped packages usually have root `<scopename>/`
                         // https://github.com/npm/cli/blob/93883bb6459208a916584cad8c6c72a315cf32af/node_modules/pacote/lib/fetcher.js#L442
                         .depth_to_skip = 1,
@@ -292,8 +283,8 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
         }
 
         if (PackageManager.verbose_install) {
-            const elapsed = bun.getRoughTickCount().ns() - time_started_for_verbose_logs;
-            Output.prettyErrorln("[{s}] Extracted to {s} ({})<r>", .{ name, tmpname, std.fmt.fmtDuration(elapsed) });
+            const elapsed = bun.getRoughTickCount(.allow_mocked_time).ns() - time_started_for_verbose_logs;
+            Output.prettyErrorln("[{s}] Extracted to {s} ({D})<r>", .{ name, tmpname, elapsed });
             Output.flush();
         }
     }
@@ -324,31 +315,30 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
         const path_to_use = path2;
 
         while (true) {
-            const dir_to_move = bun.sys.openDirAtWindowsA(bun.toFD(this.temp_dir.fd), bun.span(tmpname), .{
+            const dir_to_move = bun.sys.openDirAtWindowsA(.fromStdDir(this.temp_dir), tmpname, .{
                 .can_rename_or_delete = true,
-                .create = false,
                 .iterable = false,
                 .read_only = true,
             }).unwrap() catch |err| {
                 // i guess we just
-                this.package_manager.log.addErrorFmt(
+                log.addErrorFmt(
                     null,
                     logger.Loc.Empty,
-                    this.package_manager.allocator,
+                    bun.default_allocator,
                     "moving \"{s}\" to cache dir failed\n{}\n From: {s}\n   To: {s}",
                     .{ name, err, tmpname, folder_name },
                 ) catch unreachable;
                 return error.InstallFailed;
             };
 
-            switch (bun.C.moveOpenedFileAt(dir_to_move, bun.toFD(cache_dir.fd), path_to_use, true)) {
+            switch (bun.windows.moveOpenedFileAt(dir_to_move, .fromStdDir(cache_dir), path_to_use, true)) {
                 .err => |err| {
                     if (!did_retry) {
                         switch (err.getErrno()) {
                             .NOTEMPTY, .PERM, .BUSY, .EXIST => {
 
                                 // before we attempt to delete the destination, let's close the source dir.
-                                _ = bun.sys.close(dir_to_move);
+                                dir_to_move.close();
 
                                 // We tried to move the folder over
                                 // but it didn't work!
@@ -357,14 +347,14 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
                                 // and then delete that temp dir
                                 // The goal is to make it more difficult for an application to reach this folder
                                 var tmpname_bytes = std.mem.asBytes(&tmpname_buf);
-                                const tmpname_len = std.mem.sliceTo(tmpname, 0).len;
+                                const tmpname_len = tmpname.len;
 
                                 tmpname_bytes[tmpname_len..][0..4].* = .{ 't', 'm', 'p', 0 };
                                 const tempdest = tmpname_bytes[0 .. tmpname_len + 3 :0];
                                 switch (bun.sys.renameat(
-                                    bun.toFD(cache_dir.fd),
+                                    .fromStdDir(cache_dir),
                                     folder_name,
-                                    bun.toFD(tmpdir.fd),
+                                    .fromStdDir(tmpdir),
                                     tempdest,
                                 )) {
                                     .err => {},
@@ -379,18 +369,18 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
                             else => {},
                         }
                     }
-                    _ = bun.sys.close(dir_to_move);
-                    this.package_manager.log.addErrorFmt(
+                    dir_to_move.close();
+                    log.addErrorFmt(
                         null,
                         logger.Loc.Empty,
-                        this.package_manager.allocator,
-                        "moving \"{s}\" to cache dir failed\n{}\n  From: {s}\n    To: {s}",
+                        bun.default_allocator,
+                        "moving \"{s}\" to cache dir failed\n{f}\n  From: {s}\n    To: {s}",
                         .{ name, err, tmpname, folder_name },
                     ) catch unreachable;
                     return error.InstallFailed;
                 },
                 .result => {
-                    _ = bun.sys.close(dir_to_move);
+                    dir_to_move.close();
                 },
             }
 
@@ -405,7 +395,6 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
         // 2b. Delete the temporary directory version ONLY if we're not using a provided temporary directory
         // 3. If rename still fails, fallback to racily deleting the cache directory version and then renaming the temporary directory version again.
         //
-        const src = bun.sliceTo(tmpname, 0);
 
         if (create_subdir) {
             if (bun.Dirname.dirname(u8, folder_name)) |folder| {
@@ -414,17 +403,17 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
         }
 
         if (bun.sys.renameatConcurrently(
-            bun.toFD(tmpdir.fd),
-            src,
-            bun.toFD(cache_dir.fd),
+            .fromStdDir(tmpdir),
+            tmpname,
+            .fromStdDir(cache_dir),
             folder_name,
             .{ .move_fallback = true },
         ).asErr()) |err| {
-            this.package_manager.log.addErrorFmt(
+            log.addErrorFmt(
                 null,
                 logger.Loc.Empty,
-                this.package_manager.allocator,
-                "moving \"{s}\" to cache dir failed: {}\n  From: {s}\n    To: {s}",
+                bun.default_allocator,
+                "moving \"{s}\" to cache dir failed: {f}\n  From: {s}\n    To: {s}",
                 .{ name, err, tmpname, folder_name },
             ) catch unreachable;
             return error.InstallFailed;
@@ -434,10 +423,10 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
     // We return a resolved absolute absolute file path to the cache dir.
     // To get that directory, we open the directory again.
     var final_dir = bun.openDir(cache_dir, folder_name) catch |err| {
-        this.package_manager.log.addErrorFmt(
+        log.addErrorFmt(
             null,
             logger.Loc.Empty,
-            this.package_manager.allocator,
+            bun.default_allocator,
             "failed to verify cache dir for \"{s}\": {s}",
             .{ name, @errorName(err) },
         ) catch unreachable;
@@ -446,13 +435,13 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
     defer final_dir.close();
     // and get the fd path
     const final_path = bun.getFdPathZ(
-        final_dir.fd,
+        .fromStdDir(final_dir),
         &final_path_buf,
     ) catch |err| {
-        this.package_manager.log.addErrorFmt(
+        log.addErrorFmt(
             null,
             logger.Loc.Empty,
-            this.package_manager.allocator,
+            bun.default_allocator,
             "failed to resolve cache dir for \"{s}\": {s}",
             .{ name, @errorName(err) },
         ) catch unreachable;
@@ -470,8 +459,8 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
             this.package_manager.lockfile.trusted_dependencies.?.contains(@truncate(Semver.String.Builder.stringHash(name))),
     }) {
         const json_file, json_buf = bun.sys.File.readFileFrom(
-            bun.toFD(cache_dir.fd),
-            bun.path.joinZ(&[_]string{ folder_name, "package.json" }, .auto),
+            bun.FD.fromStdDir(cache_dir),
+            bun.path.joinZBuf(&json_path_buf, &[_]string{ folder_name, "package.json" }, .auto),
             bun.default_allocator,
         ).unwrap() catch |err| {
             if (this.resolution.tag == .github and err == error.ENOENT) {
@@ -482,10 +471,10 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
                 };
             }
 
-            this.package_manager.log.addErrorFmt(
+            log.addErrorFmt(
                 null,
                 logger.Loc.Empty,
-                this.package_manager.allocator,
+                bun.default_allocator,
                 "\"package.json\" for \"{s}\" failed to open: {s}",
                 .{ name, @errorName(err) },
             ) catch unreachable;
@@ -495,10 +484,10 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
         json_path = json_file.getPath(
             &json_path_buf,
         ).unwrap() catch |err| {
-            this.package_manager.log.addErrorFmt(
+            log.addErrorFmt(
                 null,
                 logger.Loc.Empty,
-                this.package_manager.allocator,
+                bun.default_allocator,
                 "\"package.json\" for \"{s}\" failed to resolve: {s}",
                 .{ name, @errorName(err) },
             ) catch unreachable;
@@ -506,37 +495,39 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
         };
     }
 
-    // create an index storing each version of a package installed
-    if (strings.indexOfChar(basename, '/') == null) create_index: {
-        const dest_name = switch (this.resolution.tag) {
-            .github => folder_name["@GH@".len..],
-            // trim "name@" from the prefix
-            .npm => folder_name[name.len + 1 ..],
-            else => folder_name,
-        };
-
-        if (comptime Environment.isWindows) {
-            bun.MakePath.makePath(u8, cache_dir, name) catch {
-                break :create_index;
+    if (!bun.feature_flag.BUN_FEATURE_FLAG_DISABLE_INSTALL_INDEX.get()) {
+        // create an index storing each version of a package installed
+        if (strings.indexOfChar(basename, '/') == null) create_index: {
+            const dest_name = switch (this.resolution.tag) {
+                .github => folder_name["@GH@".len..],
+                // trim "name@" from the prefix
+                .npm => folder_name[name.len + 1 ..],
+                else => folder_name,
             };
 
-            var dest_buf: bun.PathBuffer = undefined;
-            const dest_path = bun.path.joinAbsStringBufZ(
-                // only set once, should be fine to read not on main thread
-                this.package_manager.cache_directory_path,
-                &dest_buf,
-                &[_]string{ name, dest_name },
-                .windows,
-            );
+            if (comptime Environment.isWindows) {
+                bun.MakePath.makePath(u8, cache_dir, name) catch {
+                    break :create_index;
+                };
 
-            bun.sys.sys_uv.symlinkUV(final_path, dest_path, bun.windows.libuv.UV_FS_SYMLINK_JUNCTION).unwrap() catch {
-                break :create_index;
-            };
-        } else {
-            var index_dir = bun.MakePath.makeOpenPath(cache_dir, name, .{}) catch break :create_index;
-            defer index_dir.close();
+                var dest_buf: bun.PathBuffer = undefined;
+                const dest_path = bun.path.joinAbsStringBufZ(
+                    // only set once, should be fine to read not on main thread
+                    this.package_manager.cache_directory_path,
+                    &dest_buf,
+                    &[_]string{ name, dest_name },
+                    .windows,
+                );
 
-            bun.sys.symlinkat(final_path, bun.toFD(index_dir), dest_name).unwrap() catch break :create_index;
+                bun.sys.sys_uv.symlinkUV(final_path, dest_path, bun.windows.libuv.UV_FS_SYMLINK_JUNCTION).unwrap() catch {
+                    break :create_index;
+                };
+            } else {
+                var index_dir = bun.FD.fromStdDir(bun.MakePath.makeOpenPath(cache_dir, name, .{}) catch break :create_index);
+                defer index_dir.close();
+
+                bun.sys.symlinkat(final_path, index_dir, dest_name).unwrap() catch break :create_index;
+            }
         }
     }
 
@@ -551,3 +542,24 @@ fn extract(this: *const ExtractTarball, tgz_bytes: []const u8) !Install.ExtractD
         },
     };
 }
+
+const string = []const u8;
+
+const Npm = @import("./npm.zig");
+const std = @import("std");
+const FileSystem = @import("../fs.zig").FileSystem;
+const Integrity = @import("./integrity.zig").Integrity;
+const Resolution = @import("./resolution.zig").Resolution;
+
+const Install = @import("./install.zig");
+const DependencyID = Install.DependencyID;
+const PackageManager = Install.PackageManager;
+
+const bun = @import("bun");
+const Environment = bun.Environment;
+const OOM = bun.OOM;
+const Output = bun.Output;
+const Semver = bun.Semver;
+const default_allocator = bun.default_allocator;
+const logger = bun.logger;
+const strings = bun.strings;

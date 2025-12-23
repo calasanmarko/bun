@@ -11,6 +11,7 @@
 #include <JavaScriptCore/JSString.h>
 #include <JavaScriptCore/LazyProperty.h>
 #include <JavaScriptCore/LazyPropertyInlines.h>
+#include "KeyObject.h"
 
 namespace Zig {
 class GlobalObject;
@@ -66,10 +67,10 @@ public:
     // Certificate validation methods
     bool checkHost(JSGlobalObject*, std::span<const char>, uint32_t flags);
     bool checkEmail(JSGlobalObject*, std::span<const char>, uint32_t flags);
-    bool checkIP(JSGlobalObject*, std::span<const char>);
+    bool checkIP(JSGlobalObject*, const char*);
     bool checkIssued(JSGlobalObject*, JSX509Certificate* issuer);
-    bool checkPrivateKey(JSGlobalObject*, EVP_PKEY* pkey);
-    bool verify(JSGlobalObject*, EVP_PKEY* pkey);
+    bool checkPrivateKey(const KeyObject&);
+    bool verify(const KeyObject&);
     JSC::JSObject* toLegacyObject(JSGlobalObject*);
     static JSObject* toLegacyObject(ncrypto::X509View view, JSGlobalObject*);
 

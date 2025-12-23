@@ -1,63 +1,8 @@
-const bun = @import("root").bun;
-const string = bun.string;
-const Output = bun.Output;
-const Global = bun.Global;
-const Environment = bun.Environment;
-const strings = bun.strings;
-const MutableString = bun.MutableString;
-const stringZ = bun.stringZ;
-const default_allocator = bun.default_allocator;
-const StoredFileDescriptorType = bun.StoredFileDescriptorType;
-const FeatureFlags = bun.FeatureFlags;
-const C = bun.C;
-const std = @import("std");
-const lex = bun.js_lexer;
-const logger = bun.logger;
-pub const options = @import("options.zig");
-const js_parser = bun.js_parser;
-const JSON = bun.JSON;
-const js_printer = bun.js_printer;
-const js_ast = bun.JSAst;
-const linker = @import("linker.zig");
-const Ref = @import("ast/base.zig").Ref;
-const Define = @import("defines.zig").Define;
-const DebugOptions = @import("./cli.zig").Command.DebugOptions;
-const ThreadPoolLib = @import("./thread_pool.zig");
+pub const options = @import("./options.zig");
 
-const Fs = @import("fs.zig");
-const schema = @import("api/schema.zig");
-const Api = schema.Api;
-const _resolver = @import("./resolver/resolver.zig");
-const sync = @import("sync.zig");
-const ImportRecord = @import("./import_record.zig").ImportRecord;
-const allocators = @import("./allocators.zig");
-const MimeType = @import("./http/mime_type.zig");
-const resolve_path = @import("./resolver/resolve_path.zig");
-const runtime = @import("./runtime.zig");
-const PackageJSON = @import("./resolver/package_json.zig").PackageJSON;
-const MacroRemap = @import("./resolver/package_json.zig").MacroMap;
-const DebugLogs = _resolver.DebugLogs;
-const Router = @import("./router.zig");
-const isPackagePath = _resolver.isPackagePath;
-const Css = @import("css_scanner.zig");
-const DotEnv = @import("./env_loader.zig");
-const Lock = bun.Mutex;
-const NodeFallbackModules = @import("./node_fallbacks.zig");
-const CacheEntry = @import("./cache.zig").FsCacheEntry;
-const Analytics = @import("./analytics/analytics_thread.zig");
-const URL = @import("./url.zig").URL;
-const Linker = linker.Linker;
-const Resolver = _resolver.Resolver;
-const TOML = @import("./toml/toml_parser.zig").TOML;
-const JSC = bun.JSC;
-const PackageManager = @import("./install/install.zig").PackageManager;
-const DataURL = @import("./resolver/data_url.zig").DataURL;
-
-pub const MacroJSValueType = JSC.JSValue;
-const default_macro_js_value = JSC.JSValue.zero;
+pub const MacroJSValueType = jsc.JSValue;
 
 pub const EntryPoints = @import("./bundler/entry_points.zig");
-const SystemTimer = @import("./system_timer.zig").Timer;
 
 pub const ParseResult = struct {
     source: logger.Source,
@@ -68,7 +13,7 @@ pub const ParseResult = struct {
     empty: bool = false,
     pending_imports: _resolver.PendingResolution.List = .{},
 
-    runtime_transpiler_cache: ?*bun.JSC.RuntimeTranspilerCache = null,
+    runtime_transpiler_cache: ?*bun.jsc.RuntimeTranspilerCache = null,
 
     pub const AlreadyBundled = union(enum) {
         none: void,
@@ -110,10 +55,8 @@ pub const ParseResult = struct {
     }
 };
 
-const cache_files = false;
-
 pub const PluginRunner = struct {
-    global_object: *JSC.JSGlobalObject,
+    global_object: *jsc.JSGlobalObject,
     allocator: std.mem.Allocator,
 
     pub fn extractNamespace(specifier: string) string {
@@ -145,7 +88,7 @@ pub const PluginRunner = struct {
         importer: []const u8,
         log: *logger.Log,
         loc: logger.Loc,
-        target: JSC.JSGlobalObject.BunPluginTarget,
+        target: jsc.JSGlobalObject.BunPluginTarget,
     ) bun.JSError!?Fs.Path {
         var global = this.global_object;
         const namespace_slice = extractNamespace(specifier);
@@ -153,7 +96,7 @@ pub const PluginRunner = struct {
             bun.String.init(namespace_slice)
         else
             bun.String.empty;
-        const on_resolve_plugin = global.runOnResolvePlugins(
+        const on_resolve_plugin = try global.runOnResolvePlugins(
             namespace,
             bun.String.init(specifier).substring(if (namespace.length() > 0) namespace.length() + 1 else 0),
             bun.String.init(importer),
@@ -166,7 +109,7 @@ pub const PluginRunner = struct {
             return null;
         }
 
-        const file_path = path_value.toBunString(global);
+        const file_path = try path_value.toBunString(global);
         defer file_path.deref();
 
         if (file_path.length() == 0) {
@@ -198,7 +141,7 @@ pub const PluginRunner = struct {
                     return null;
                 }
 
-                const namespace_str = namespace_value.toBunString(global);
+                const namespace_str = try namespace_value.toBunString(global);
                 if (namespace_str.length() == 0) {
                     namespace_str.deref();
                     break :brk bun.String.init("file");
@@ -230,20 +173,20 @@ pub const PluginRunner = struct {
 
         if (static_namespace) {
             return Fs.Path.initWithNamespace(
-                std.fmt.allocPrint(this.allocator, "{any}", .{file_path}) catch unreachable,
+                std.fmt.allocPrint(this.allocator, "{f}", .{file_path}) catch unreachable,
                 user_namespace.byteSlice(),
             );
         } else {
             return Fs.Path.initWithNamespace(
-                std.fmt.allocPrint(this.allocator, "{any}", .{file_path}) catch unreachable,
-                std.fmt.allocPrint(this.allocator, "{any}", .{user_namespace}) catch unreachable,
+                std.fmt.allocPrint(this.allocator, "{f}", .{file_path}) catch unreachable,
+                std.fmt.allocPrint(this.allocator, "{f}", .{user_namespace}) catch unreachable,
             );
         }
     }
 
-    pub fn onResolveJSC(this: *const PluginRunner, namespace: bun.String, specifier: bun.String, importer: bun.String, target: JSC.JSGlobalObject.BunPluginTarget) bun.JSError!?JSC.ErrorableString {
+    pub fn onResolveJSC(this: *const PluginRunner, namespace: bun.String, specifier: bun.String, importer: bun.String, target: jsc.JSGlobalObject.BunPluginTarget) bun.JSError!?jsc.ErrorableString {
         var global = this.global_object;
-        const on_resolve_plugin = global.runOnResolvePlugins(
+        const on_resolve_plugin = try global.runOnResolvePlugins(
             if (namespace.length() > 0 and !namespace.eqlComptime("file"))
                 namespace
             else
@@ -256,18 +199,18 @@ pub const PluginRunner = struct {
         const path_value = try on_resolve_plugin.get(global, "path") orelse return null;
         if (path_value.isEmptyOrUndefinedOrNull()) return null;
         if (!path_value.isString()) {
-            return JSC.ErrorableString.err(
+            return jsc.ErrorableString.err(
                 error.JSErrorObject,
-                bun.String.static("Expected \"path\" to be a string in onResolve plugin").toErrorInstance(this.global_object).asVoid(),
+                bun.String.static("Expected \"path\" to be a string in onResolve plugin").toErrorInstance(this.global_object),
             );
         }
 
-        const file_path = path_value.toBunString(global);
+        const file_path = try path_value.toBunString(global);
 
         if (file_path.length() == 0) {
-            return JSC.ErrorableString.err(
+            return jsc.ErrorableString.err(
                 error.JSErrorObject,
-                bun.String.static("Expected \"path\" to be a non-empty string in onResolve plugin").toErrorInstance(this.global_object).asVoid(),
+                bun.String.static("Expected \"path\" to be a non-empty string in onResolve plugin").toErrorInstance(this.global_object),
             );
         } else if
         // TODO: validate this better
@@ -276,22 +219,22 @@ pub const PluginRunner = struct {
             file_path.eqlComptime("...") or
             file_path.eqlComptime(" "))
         {
-            return JSC.ErrorableString.err(
+            return jsc.ErrorableString.err(
                 error.JSErrorObject,
-                bun.String.static("\"path\" is invalid in onResolve plugin").toErrorInstance(this.global_object).asVoid(),
+                bun.String.static("\"path\" is invalid in onResolve plugin").toErrorInstance(this.global_object),
             );
         }
         var static_namespace = true;
         const user_namespace: bun.String = brk: {
             if (try on_resolve_plugin.get(global, "namespace")) |namespace_value| {
                 if (!namespace_value.isString()) {
-                    return JSC.ErrorableString.err(
+                    return jsc.ErrorableString.err(
                         error.JSErrorObject,
-                        bun.String.static("Expected \"namespace\" to be a string").toErrorInstance(this.global_object).asVoid(),
+                        bun.String.static("Expected \"namespace\" to be a string").toErrorInstance(this.global_object),
                     );
                 }
 
-                const namespace_str = namespace_value.toBunString(global);
+                const namespace_str = try namespace_value.toBunString(global);
                 if (namespace_str.length() == 0) {
                     break :brk bun.String.static("file");
                 }
@@ -320,16 +263,13 @@ pub const PluginRunner = struct {
         };
         defer user_namespace.deref();
 
-        // Our super slow way of cloning the string into memory owned by JSC
-        const combined_string = std.fmt.allocPrint(
-            this.allocator,
-            "{any}:{any}",
-            .{ user_namespace, file_path },
-        ) catch unreachable;
+        // Our super slow way of cloning the string into memory owned by jsc
+        const combined_string = std.fmt.allocPrint(this.allocator, "{f}:{f}", .{ user_namespace, file_path }) catch unreachable;
         var out_ = bun.String.init(combined_string);
-        const out = out_.toJS(this.global_object).toBunString(this.global_object);
+        const jsval = out_.toJS(this.global_object);
+        const out = jsval.toBunString(this.global_object) catch @panic("unreachable");
         this.allocator.free(combined_string);
-        return JSC.ErrorableString.ok(out);
+        return jsc.ErrorableString.ok(out);
     }
 };
 
@@ -346,7 +286,7 @@ pub const Transpiler = struct {
     result: options.TransformResult,
     resolver: Resolver,
     fs: *Fs.FileSystem,
-    output_files: std.ArrayList(options.OutputFile),
+    output_files: std.array_list.Managed(options.OutputFile),
     resolve_results: *ResolveResults,
     resolve_queue: ResolveQueue,
     elapsed: u64 = 0,
@@ -360,7 +300,7 @@ pub const Transpiler = struct {
 
     macro_context: ?js_ast.Macro.MacroContext = null,
 
-    pub const isCacheEnabled = cache_files;
+    pub const isCacheEnabled = false;
 
     pub inline fn getPackageManager(this: *Transpiler) *PackageManager {
         return this.resolver.getPackageManager();
@@ -372,6 +312,7 @@ pub const Transpiler = struct {
         this.resolver.log = log;
     }
 
+    // TODO: remove this method. it does not make sense
     pub fn setAllocator(this: *Transpiler, allocator: std.mem.Allocator) void {
         this.allocator = allocator;
         this.linker.allocator = allocator;
@@ -435,7 +376,7 @@ pub const Transpiler = struct {
                 }
             }
 
-            transpiler.log.addErrorFmt(null, logger.Loc.Empty, transpiler.allocator, "{s} resolving \"{s}\" (entry point)", .{ @errorName(err), entry_point }) catch bun.outOfMemory();
+            bun.handleOom(transpiler.log.addErrorFmt(null, logger.Loc.Empty, transpiler.allocator, "{s} resolving \"{s}\" (entry point)", .{ @errorName(err), entry_point }));
             return err;
         };
     }
@@ -443,7 +384,7 @@ pub const Transpiler = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         log: *logger.Log,
-        opts: Api.TransformOptions,
+        opts: api.TransformOptions,
         env_loader_: ?*DotEnv.Loader,
     ) !Transpiler {
         js_ast.Expr.Data.Store.create();
@@ -491,9 +432,16 @@ pub const Transpiler = struct {
             .result = options.TransformResult{ .outbase = bundle_options.output_dir },
             .resolve_results = resolve_results,
             .resolve_queue = ResolveQueue.init(allocator),
-            .output_files = std.ArrayList(options.OutputFile).init(allocator),
+            .output_files = std.array_list.Managed(options.OutputFile).init(allocator),
             .env = env_loader,
         };
+    }
+
+    pub fn deinit(this: *Transpiler) void {
+        this.options.deinit(this.allocator);
+        this.log.deinit();
+        this.resolver.deinit();
+        this.fs.deinit();
     }
 
     pub fn configureLinkerWithAutoJSX(transpiler: *Transpiler, auto_jsx: bool) void {
@@ -539,7 +487,7 @@ pub const Transpiler = struct {
 
                 // Process always has highest priority.
                 const was_production = this.options.production;
-                this.env.loadProcess();
+                try this.env.loadProcess();
                 const has_production_env = this.env.isProduction();
                 if (!was_production and has_production_env) {
                     this.options.setProduction(true);
@@ -555,7 +503,7 @@ pub const Transpiler = struct {
                 }
             },
             .disable => {
-                this.env.loadProcess();
+                try this.env.loadProcess();
                 if (this.env.isProduction()) {
                     this.options.setProduction(true);
                     this.resolver.opts.setProduction(true);
@@ -580,7 +528,7 @@ pub const Transpiler = struct {
             this.options.env.prefix = "BUN_";
         }
 
-        try this.runEnvLoader(false);
+        try this.runEnvLoader(this.options.env.disable_default_env_files);
 
         var is_production = this.env.isProduction();
 
@@ -621,11 +569,12 @@ pub const Transpiler = struct {
 
     pub noinline fn dumpEnvironmentVariables(transpiler: *const Transpiler) void {
         @branchHint(.cold);
-        const opts = std.json.StringifyOptions{
+        const opts = std.json.Stringify.Options{
             .whitespace = .indent_2,
         };
         Output.flush();
-        std.json.stringify(transpiler.env.map.*, opts, Output.writer()) catch unreachable;
+        var w: std.json.Stringify = .{ .writer = Output.writer(), .options = opts };
+        w.write(transpiler.env.map.*) catch unreachable;
         Output.flush();
     }
 
@@ -645,7 +594,7 @@ pub const Transpiler = struct {
     ) !?options.OutputFile {
         _ = outstream;
 
-        if (resolve_result.is_external) {
+        if (resolve_result.flags.is_external) {
             return null;
         }
 
@@ -670,7 +619,7 @@ pub const Transpiler = struct {
         };
 
         switch (loader) {
-            .jsx, .tsx, .js, .ts, .json, .toml, .text => {
+            .jsx, .tsx, .js, .ts, .json, .jsonc, .toml, .yaml, .text => {
                 var result = transpiler.parse(
                     ParseOptions{
                         .allocator = transpiler.allocator,
@@ -681,7 +630,7 @@ pub const Transpiler = struct {
                         .file_hash = null,
                         .macro_remappings = transpiler.options.macro_remap,
                         .jsx = resolve_result.jsx,
-                        .emit_decorator_metadata = resolve_result.emit_decorator_metadata,
+                        .emit_decorator_metadata = resolve_result.flags.emit_decorator_metadata,
                     },
                     client_entry_point_,
                 ) orelse {
@@ -708,7 +657,7 @@ pub const Transpiler = struct {
                         );
                 }
 
-                const buffer_writer = try js_printer.BufferWriter.init(transpiler.allocator);
+                const buffer_writer = js_printer.BufferWriter.init(transpiler.allocator);
                 var writer = js_printer.BufferPrinter.init(buffer_writer);
 
                 output_file.size = switch (transpiler.options.target) {
@@ -749,24 +698,46 @@ pub const Transpiler = struct {
                     transpiler.log.addErrorFmt(null, logger.Loc.Empty, transpiler.allocator, "{s} reading \"{s}\"", .{ @errorName(err), file_path.pretty }) catch {};
                     return null;
                 };
-                var sheet = switch (bun.css.StyleSheet(bun.css.DefaultAtRule).parse(alloc, entry.contents, bun.css.ParserOptions.default(alloc, transpiler.log), null)) {
+                var opts = bun.css.ParserOptions.default(alloc, transpiler.log);
+                const css_module_suffix = ".module.css";
+                const enable_css_modules = file_path.text.len > css_module_suffix.len and
+                    strings.eqlComptime(file_path.text[file_path.text.len - css_module_suffix.len ..], css_module_suffix);
+                if (enable_css_modules) {
+                    opts.filename = bun.path.basename(file_path.text);
+                    opts.css_modules = bun.css.CssModuleConfig{};
+                }
+                var sheet, var extra = switch (bun.css.StyleSheet(bun.css.DefaultAtRule).parse(
+                    alloc,
+                    entry.contents,
+                    opts,
+                    null,
+                    // TODO: DO WE EVEN HAVE SOURCE INDEX IN THIS TRANSPILER.ZIG file??
+                    bun.bundle_v2.Index.invalid,
+                )) {
                     .result => |v| v,
                     .err => |e| {
-                        transpiler.log.addErrorFmt(null, logger.Loc.Empty, transpiler.allocator, "{} parsing", .{e}) catch unreachable;
+                        transpiler.log.addErrorFmt(null, logger.Loc.Empty, transpiler.allocator, "{f} parsing", .{e}) catch unreachable;
                         return null;
                     },
                 };
-                if (sheet.minify(alloc, bun.css.MinifyOptions.default()).asErr()) |e| {
-                    transpiler.log.addErrorFmt(null, logger.Loc.Empty, transpiler.allocator, "{} while minifying", .{e.kind}) catch bun.outOfMemory();
+                if (sheet.minify(alloc, bun.css.MinifyOptions.default(), &extra).asErr()) |e| {
+                    bun.handleOom(transpiler.log.addErrorFmt(null, logger.Loc.Empty, transpiler.allocator, "{f} while minifying", .{e.kind}));
                     return null;
                 }
-                const result = switch (sheet.toCss(alloc, bun.css.PrinterOptions{
-                    .targets = bun.css.Targets.forBundlerTarget(transpiler.options.target),
-                    .minify = transpiler.options.minify_whitespace,
-                }, null)) {
+                const symbols = bun.ast.Symbol.Map{};
+                const result = switch (sheet.toCss(
+                    alloc,
+                    bun.css.PrinterOptions{
+                        .targets = bun.css.Targets.forBundlerTarget(transpiler.options.target),
+                        .minify = transpiler.options.minify_whitespace,
+                    },
+                    null,
+                    null,
+                    &symbols,
+                )) {
                     .result => |v| v,
                     .err => |e| {
-                        transpiler.log.addErrorFmt(null, logger.Loc.Empty, transpiler.allocator, "{} while printing", .{e}) catch bun.outOfMemory();
+                        bun.handleOom(transpiler.log.addErrorFmt(null, logger.Loc.Empty, transpiler.allocator, "{f} while printing", .{e}));
                         return null;
                     },
                 };
@@ -778,12 +749,14 @@ pub const Transpiler = struct {
                 var pathname = try transpiler.allocator.alloc(u8, hashed_name.len + file_path.name.ext.len);
                 bun.copy(u8, pathname, hashed_name);
                 bun.copy(u8, pathname[hashed_name.len..], file_path.name.ext);
-                const dir = if (transpiler.options.output_dir_handle) |output_handle| bun.toFD(output_handle.fd) else .zero;
 
                 output_file.value = .{
                     .copy = options.OutputFile.FileOperation{
                         .pathname = pathname,
-                        .dir = dir,
+                        .dir = if (transpiler.options.output_dir_handle) |output_handle|
+                            .fromStdDir(output_handle)
+                        else
+                            .invalid,
                         .is_outdir = true,
                     },
                 };
@@ -802,12 +775,15 @@ pub const Transpiler = struct {
         comptime format: js_printer.Format,
         comptime enable_source_map: bool,
         source_map_context: ?js_printer.SourceMapHandler,
-        runtime_transpiler_cache: ?*bun.JSC.RuntimeTranspilerCache,
+        runtime_transpiler_cache: ?*bun.jsc.RuntimeTranspilerCache,
     ) !usize {
-        const tracer = bun.tracy.traceNamed(@src(), if (enable_source_map) "JSPrinter.printWithSourceMap" else "JSPrinter.print");
+        const tracer = if (enable_source_map)
+            bun.perf.trace("JSPrinter.printWithSourceMap")
+        else
+            bun.perf.trace("JSPrinter.print");
         defer tracer.end();
 
-        const symbols = js_ast.Symbol.NestedList.init(&[_]js_ast.Symbol.List{ast.symbols});
+        const symbols = js_ast.Symbol.NestedList.fromBorrowedSliceDangerous(&.{ast.symbols});
 
         return switch (format) {
             .cjs => try js_printer.printCommonJS(
@@ -829,6 +805,8 @@ pub const Transpiler = struct {
                     .transform_only = transpiler.options.transform_only,
                     .runtime_transpiler_cache = runtime_transpiler_cache,
                     .print_dce_annotations = transpiler.options.emit_dce_annotations,
+                    .hmr_ref = ast.wrapper_ref,
+                    .mangled_props = null,
                 },
                 enable_source_map,
             ),
@@ -853,6 +831,8 @@ pub const Transpiler = struct {
                     .import_meta_ref = ast.import_meta_ref,
                     .runtime_transpiler_cache = runtime_transpiler_cache,
                     .print_dce_annotations = transpiler.options.emit_dce_annotations,
+                    .hmr_ref = ast.wrapper_ref,
+                    .mangled_props = null,
                 },
                 enable_source_map,
             ),
@@ -887,6 +867,8 @@ pub const Transpiler = struct {
                         .runtime_transpiler_cache = runtime_transpiler_cache,
                         .target = transpiler.options.target,
                         .print_dce_annotations = transpiler.options.emit_dce_annotations,
+                        .hmr_ref = ast.wrapper_ref,
+                        .mangled_props = null,
                     },
                     enable_source_map,
                 ),
@@ -922,7 +904,7 @@ pub const Transpiler = struct {
         comptime format: js_printer.Format,
         handler: js_printer.SourceMapHandler,
     ) !usize {
-        if (bun.getRuntimeFeatureFlag("BUN_FEATURE_FLAG_DISABLE_SOURCE_MAPS")) {
+        if (bun.feature_flag.BUN_FEATURE_FLAG_DISABLE_SOURCE_MAPS.get()) {
             return transpiler.printWithSourceMapMaybe(
                 result.ast,
                 &result.source,
@@ -969,8 +951,14 @@ pub const Transpiler = struct {
 
         dont_bundle_twice: bool = false,
         allow_commonjs: bool = false,
+        /// `"type"` from `package.json`. Used to make sure the parser defaults
+        /// to CommonJS or ESM based on what the package.json says, when it
+        /// doesn't otherwise know from reading the source code.
+        ///
+        /// See: https://nodejs.org/api/packages.html#type
+        module_type: options.ModuleType = .unknown,
 
-        runtime_transpiler_cache: ?*bun.JSC.RuntimeTranspilerCache = null,
+        runtime_transpiler_cache: ?*bun.jsc.RuntimeTranspilerCache = null,
 
         keep_json_and_toml_as_one_statement: bool = false,
         allow_bytecode_cache: bool = false,
@@ -1015,7 +1003,7 @@ pub const Transpiler = struct {
 
         var input_fd: ?StoredFileDescriptorType = null;
 
-        const source: logger.Source = brk: {
+        const source: *const logger.Source = &brk: {
             if (this_parse.virtual_source) |virtual_source| {
                 break :brk virtual_source.*;
             }
@@ -1047,7 +1035,7 @@ pub const Transpiler = struct {
             }
 
             const entry = transpiler.resolver.caches.fs.readFileWithAllocator(
-                if (use_shared_buffer) bun.fs_allocator else this_parse.allocator,
+                if (use_shared_buffer) bun.default_allocator else this_parse.allocator,
                 transpiler.fs,
                 path.text,
                 dirname_fd,
@@ -1065,11 +1053,13 @@ pub const Transpiler = struct {
         };
 
         if (comptime return_file_only) {
-            return ParseResult{ .source = source, .input_fd = input_fd, .loader = loader, .empty = true, .ast = js_ast.Ast.empty };
+            return ParseResult{ .source = source.*, .input_fd = input_fd, .loader = loader, .empty = true, .ast = js_ast.Ast.empty };
         }
 
-        if (loader != .wasm and source.contents.len == 0 and source.contents.len < 33 and std.mem.trim(u8, source.contents, "\n\r ").len == 0) {
-            return ParseResult{ .source = source, .input_fd = input_fd, .loader = loader, .empty = true, .ast = js_ast.Ast.empty };
+        if (source.contents.len == 0 or (source.contents.len < 33 and std.mem.trim(u8, source.contents, "\n\r ").len == 0)) {
+            if (!loader.handlesEmptyFile()) {
+                return ParseResult{ .source = source.*, .input_fd = input_fd, .loader = loader, .empty = true, .ast = js_ast.Ast.empty };
+            }
         }
 
         switch (loader) {
@@ -1081,7 +1071,7 @@ pub const Transpiler = struct {
                 // wasm magic number
                 if (source.isWebAssembly()) {
                     return ParseResult{
-                        .source = source,
+                        .source = source.*,
                         .input_fd = input_fd,
                         .loader = .wasm,
                         .empty = true,
@@ -1110,6 +1100,7 @@ pub const Transpiler = struct {
                 opts.features.dont_bundle_twice = this_parse.dont_bundle_twice;
 
                 opts.features.commonjs_at_runtime = this_parse.allow_commonjs;
+                opts.module_type = this_parse.module_type;
 
                 opts.tree_shaking = transpiler.options.tree_shaking;
                 opts.features.inlining = transpiler.options.inlining;
@@ -1123,6 +1114,7 @@ pub const Transpiler = struct {
                 opts.features.minify_identifiers = transpiler.options.minify_identifiers;
                 opts.features.dead_code_elimination = transpiler.options.dead_code_elimination;
                 opts.features.remove_cjs_module_wrapper = this_parse.remove_cjs_module_wrapper;
+                opts.features.bundler_feature_flags = transpiler.options.bundler_feature_flags;
 
                 if (transpiler.macro_context == null) {
                     transpiler.macro_context = js_ast.Macro.MacroContext.init(transpiler);
@@ -1145,23 +1137,23 @@ pub const Transpiler = struct {
                     opts,
                     transpiler.options.define,
                     transpiler.log,
-                    &source,
+                    source,
                 ) catch null) orelse return null) {
-                    .ast => |value| ParseResult{
+                    .ast => |value| .{
                         .ast = value,
-                        .source = source,
+                        .source = source.*,
                         .loader = loader,
                         .input_fd = input_fd,
                         .runtime_transpiler_cache = this_parse.runtime_transpiler_cache,
                     },
-                    .cached => ParseResult{
+                    .cached => .{
                         .ast = undefined,
                         .runtime_transpiler_cache = this_parse.runtime_transpiler_cache,
-                        .source = source,
+                        .source = source.*,
                         .loader = loader,
                         .input_fd = input_fd,
                     },
-                    .already_bundled => |already_bundled| ParseResult{
+                    .already_bundled => |already_bundled| .{
                         .ast = undefined,
                         .already_bundled = switch (already_bundled) {
                             .bun => .source_code,
@@ -1172,7 +1164,7 @@ pub const Transpiler = struct {
                                     var path_buf2: bun.PathBuffer = undefined;
                                     @memcpy(path_buf2[0..path.text.len], path.text);
                                     path_buf2[path.text.len..][0..bun.bytecode_extension.len].* = bun.bytecode_extension.*;
-                                    const bytecode = bun.sys.File.toSourceAt(dirname_fd, path_buf2[0 .. path.text.len + bun.bytecode_extension.len], bun.default_allocator).asValue() orelse break :brk default_value;
+                                    const bytecode = bun.sys.File.toSourceAt(dirname_fd.unwrapValid() orelse bun.FD.cwd(), path_buf2[0 .. path.text.len + bun.bytecode_extension.len], bun.default_allocator, .{}).asValue() orelse break :brk default_value;
                                     if (bytecode.contents.len == 0) {
                                         break :brk default_value;
                                     }
@@ -1181,23 +1173,24 @@ pub const Transpiler = struct {
                                 break :brk default_value;
                             },
                         },
-                        .source = source,
+                        .source = source.*,
                         .loader = loader,
                         .input_fd = input_fd,
                     },
                 };
             },
             // TODO: use lazy export AST
-            inline .toml, .json => |kind| {
-                var expr = if (kind == .json)
+            inline .toml, .yaml, .json, .jsonc => |kind| {
+                var expr = if (kind == .jsonc)
                     // We allow importing tsconfig.*.json or jsconfig.*.json with comments
                     // These files implicitly become JSONC files, which aligns with the behavior of text editors.
-                    if (source.path.isJSONCFile())
-                        JSON.parseTSConfig(&source, transpiler.log, allocator, false) catch return null
-                    else
-                        JSON.parse(&source, transpiler.log, allocator, false) catch return null
+                    JSON.parseTSConfig(source, transpiler.log, allocator, false) catch return null
+                else if (kind == .json)
+                    JSON.parse(source, transpiler.log, allocator, false) catch return null
                 else if (kind == .toml)
-                    TOML.parse(&source, transpiler.log, allocator, false) catch return null
+                    TOML.parse(source, transpiler.log, allocator, false) catch return null
+                else if (kind == .yaml)
+                    YAML.parse(source, transpiler.log, allocator) catch return null
                 else
                     @compileError("unreachable");
 
@@ -1216,13 +1209,18 @@ pub const Transpiler = struct {
                         const properties: []js_ast.G.Property = expr.data.e_object.properties.slice();
                         if (properties.len > 0) {
                             var stmts = allocator.alloc(js_ast.Stmt, 3) catch return null;
-                            var decls = allocator.alloc(js_ast.G.Decl, properties.len) catch return null;
+                            var decls = std.ArrayListUnmanaged(js_ast.G.Decl).initCapacity(
+                                allocator,
+                                properties.len,
+                            ) catch |err| bun.handleOom(err);
+                            decls.expandToCapacity();
+
                             symbols = allocator.alloc(js_ast.Symbol, properties.len) catch return null;
                             var export_clauses = allocator.alloc(js_ast.ClauseItem, properties.len) catch return null;
                             var duplicate_key_checker = bun.StringHashMap(u32).init(allocator);
                             defer duplicate_key_checker.deinit();
                             var count: usize = 0;
-                            for (properties, decls, symbols, 0..) |*prop, *decl, *symbol, i| {
+                            for (properties, decls.items, symbols, 0..) |*prop, *decl, *symbol, i| {
                                 const name = prop.key.?.data.e_string.slice(allocator);
                                 // Do not make named exports for "default" exports
                                 if (strings.eqlComptime(name, "default"))
@@ -1230,7 +1228,7 @@ pub const Transpiler = struct {
 
                                 const visited = duplicate_key_checker.getOrPut(name) catch continue;
                                 if (visited.found_existing) {
-                                    decls[visited.value_ptr.*].value = prop.value.?;
+                                    decls.items[visited.value_ptr.*].value = prop.value.?;
                                     continue;
                                 }
                                 visited.value_ptr.* = @truncate(i);
@@ -1258,10 +1256,11 @@ pub const Transpiler = struct {
                                 count += 1;
                             }
 
+                            decls.shrinkRetainingCapacity(count);
                             stmts[0] = js_ast.Stmt.alloc(
                                 js_ast.S.Local,
                                 js_ast.S.Local{
-                                    .decls = js_ast.G.Decl.List.init(decls[0..count]),
+                                    .decls = js_ast.G.Decl.List.moveFromList(&decls),
                                     .kind = .k_var,
                                 },
                                 logger.Loc{
@@ -1272,6 +1271,7 @@ pub const Transpiler = struct {
                                 js_ast.S.ExportClause,
                                 js_ast.S.ExportClause{
                                     .items = export_clauses[0..count],
+                                    .is_single_line = false,
                                 },
                                 logger.Loc{
                                     .start = 0,
@@ -1313,11 +1313,11 @@ pub const Transpiler = struct {
                     }
                 };
                 var ast = js_ast.Ast.fromParts(parts);
-                ast.symbols = js_ast.Symbol.List.init(symbols);
+                ast.symbols = js_ast.Symbol.List.fromOwnedSlice(symbols);
 
                 return ParseResult{
                     .ast = ast,
-                    .source = source,
+                    .source = source.*,
                     .loader = loader,
                     .input_fd = input_fd,
                 };
@@ -1341,7 +1341,7 @@ pub const Transpiler = struct {
 
                 return ParseResult{
                     .ast = js_ast.Ast.fromParts(parts),
-                    .source = source,
+                    .source = source.*,
                     .loader = loader,
                     .input_fd = input_fd,
                 };
@@ -1361,7 +1361,7 @@ pub const Transpiler = struct {
 
                     return ParseResult{
                         .ast = js_ast.Ast.empty,
-                        .source = source,
+                        .source = source.*,
                         .loader = loader,
                         .input_fd = input_fd,
                     };
@@ -1442,7 +1442,7 @@ pub const Transpiler = struct {
         transpiler: *Transpiler,
         allocator: std.mem.Allocator,
         log: *logger.Log,
-        opts: Api.TransformOptions,
+        opts: api.TransformOptions,
     ) !options.TransformResult {
         _ = opts;
         var entry_points = try allocator.alloc(_resolver.Result, transpiler.options.entry_points.len);
@@ -1455,7 +1455,7 @@ pub const Transpiler = struct {
         const did_start = false;
 
         if (transpiler.options.output_dir_handle == null) {
-            const outstream = bun.sys.File.from(std.io.getStdOut());
+            const outstream = bun.sys.File.from(std.fs.File.stdout());
 
             if (!did_start) {
                 try switch (transpiler.options.import_path_format) {
@@ -1565,7 +1565,51 @@ pub const ResolveResults = std.AutoHashMap(
     u64,
     void,
 );
-pub const ResolveQueue = std.fifo.LinearFifo(
+pub const ResolveQueue = bun.LinearFifo(
     _resolver.Result,
-    std.fifo.LinearFifoBufferType.Dynamic,
+    .Dynamic,
 );
+
+const string = []const u8;
+
+const DotEnv = @import("./env_loader.zig");
+const Fs = @import("./fs.zig");
+const MimeType = @import("./http/MimeType.zig");
+const NodeFallbackModules = @import("./node_fallbacks.zig");
+const Router = @import("./router.zig");
+const runtime = @import("./runtime.zig");
+const std = @import("std");
+const DataURL = @import("./resolver/data_url.zig").DataURL;
+const MacroRemap = @import("./resolver/package_json.zig").MacroMap;
+const PackageManager = @import("./install/install.zig").PackageManager;
+const SystemTimer = @import("./system_timer.zig").Timer;
+const URL = @import("./url.zig").URL;
+
+const linker = @import("./linker.zig");
+const Linker = linker.Linker;
+
+const _resolver = @import("./resolver/resolver.zig");
+const DebugLogs = _resolver.DebugLogs;
+const Resolver = _resolver.Resolver;
+
+const bun = @import("bun");
+const Environment = bun.Environment;
+const FeatureFlags = bun.FeatureFlags;
+const Global = bun.Global;
+const JSON = bun.json;
+const MutableString = bun.MutableString;
+const Output = bun.Output;
+const StoredFileDescriptorType = bun.StoredFileDescriptorType;
+const default_allocator = bun.default_allocator;
+const js_parser = bun.js_parser;
+const js_printer = bun.js_printer;
+const jsc = bun.jsc;
+const logger = bun.logger;
+const strings = bun.strings;
+const api = bun.schema.api;
+const TOML = bun.interchange.toml.TOML;
+const YAML = bun.interchange.yaml.YAML;
+const default_macro_js_value = jsc.JSValue.zero;
+
+const js_ast = bun.ast;
+const Ref = bun.ast.Ref;

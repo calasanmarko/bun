@@ -1,11 +1,13 @@
 // Hardcoded module "node:fs/promises"
 const types = require("node:util/types");
 const EventEmitter = require("node:events");
-const fs = $zig("node_fs_binding.zig", "createBinding");
+const fs = $zig("node_fs_binding.zig", "createBinding") as $ZigGeneratedClasses.NodeJSFS;
 const { glob } = require("internal/fs/glob");
+const { validateInteger } = require("internal/validators");
+
 const constants = $processBindingConstants.fs;
 
-var PromisePrototypeFinally = Promise.prototype.finally; //TODO
+var PromisePrototypeFinally = $Promise.prototype.finally; //TODO
 var SymbolAsyncDispose = Symbol.asyncDispose;
 var ObjectFreeze = Object.freeze;
 
@@ -19,10 +21,10 @@ const kUnref = Symbol("kUnref");
 const kTransfer = Symbol("kTransfer");
 const kTransferList = Symbol("kTransferList");
 const kDeserialize = Symbol("kDeserialize");
-const kEmptyObject = ObjectFreeze({ __proto__: null });
+const kEmptyObject = ObjectFreeze(Object.create(null));
 const kFlag = Symbol("kFlag");
 
-const { validateInteger } = require("internal/validators");
+let Interface; // lazy value for require("node:readline").Interface.
 
 function watch(
   filename: string | Buffer | URL,
@@ -106,7 +108,7 @@ function cp(src, dest, options) {
     throw new TypeError("options must be an object");
   }
   if (options.dereference || options.filter || options.preserveTimestamps || options.verbatimSymlinks) {
-    return require("../internal/fs/cp")(src, dest, options);
+    return require("internal/fs/cp")(src, dest, options);
   }
   return fs.cp(src, dest, options.recursive, options.errorOnExist, options.force ?? true, options.mode);
 }
@@ -139,7 +141,7 @@ const exports = {
   exists: async function exists() {
     try {
       return await fs.exists.$apply(fs, arguments);
-    } catch (e) {
+    } catch {
       return false;
     }
   },
@@ -161,7 +163,7 @@ const exports = {
   mkdtemp: asyncWrap(fs.mkdtemp, "mkdtemp"),
   statfs: asyncWrap(fs.statfs, "statfs"),
   open: async (path, flags = "r", mode = 0o666) => {
-    return new FileHandle(await fs.open(path, flags, mode), flags);
+    return new private_symbols.FileHandle(await fs.open(path, flags, mode), flags);
   },
   read: asyncWrap(fs.read, "read"),
   write: asyncWrap(fs.write, "write"),
@@ -252,7 +254,7 @@ function asyncWrap(fn: any, name: string) {
   // Partially taken from https://github.com/nodejs/node/blob/c25878d370/lib/internal/fs/promises.js#L148
   // These functions await the result so that errors propagate correctly with
   // async stack traces and so that the ref counting is correct.
-  var FileHandle = (private_symbols.FileHandle = class FileHandle extends EventEmitter {
+  class FileHandle extends EventEmitter {
     constructor(fd, flag) {
       super();
       this[kFd] = fd ? fd : -1;
@@ -274,6 +276,8 @@ function asyncWrap(fn: any, name: string) {
     [kFlag];
     [kClosePromise];
     [kRefs];
+    // needs to exist for https://github.com/nodejs/node/blob/8641d941893/test/parallel/test-worker-message-port-transfer-fake-js-transferable.js to pass
+    [Symbol("messaging_transfer_symbol")]() {}
 
     async appendFile(data, options) {
       const fd = this[kFd];
@@ -412,7 +416,11 @@ function asyncWrap(fn: any, name: string) {
     }
 
     readLines(options = undefined) {
-      throw new Error("BUN TODO FileHandle.readLines");
+      if (Interface === undefined) Interface = require("node:readline").Interface;
+      return new Interface({
+        input: this.createReadStream(options),
+        crlfDelay: Infinity,
+      });
     }
 
     async stat(options) {
@@ -511,10 +519,10 @@ function asyncWrap(fn: any, name: string) {
       }
     }
 
-    close = () => {
+    async close() {
       const fd = this[kFd];
       if (fd === -1) {
-        return Promise.resolve();
+        return Promise.$resolve();
       }
 
       if (this[kClosePromise]) {
@@ -542,13 +550,13 @@ function asyncWrap(fn: any, name: string) {
 
       this.emit("close");
       return this[kClosePromise];
-    };
+    }
 
     async [SymbolAsyncDispose]() {
       return this.close();
     }
 
-    readableWebStream(options = kEmptyObject) {
+    readableWebStream(_options = kEmptyObject) {
       const fd = this[kFd];
       throwEBADFIfNecessary("readableWebStream", fd);
 
@@ -583,7 +591,7 @@ function asyncWrap(fn: any, name: string) {
       throw new Error("BUN TODO FileHandle.kTransferList");
     }
 
-    [kDeserialize]({ handle }) {
+    [kDeserialize](_) {
       throw new Error("BUN TODO FileHandle.kDeserialize");
     }
 
@@ -597,7 +605,8 @@ function asyncWrap(fn: any, name: string) {
         this.close().$then(this[kCloseResolve], this[kCloseReject]);
       }
     }
-  });
+  }
+  private_symbols.FileHandle = FileHandle;
 }
 
 function throwEBADFIfNecessary(fn: string, fd) {
@@ -626,7 +635,7 @@ async function writeFileAsyncIteratorInner(fd, iterable, encoding, signal: Abort
         $debug("Re-encoding chunk to", encoding);
         chunk = Buffer.from(chunk, encoding);
       } else if ($isUndefinedOrNull(chunk)) {
-        throw $ERR_INVALID_ARG_TYPE("write() expects a string, ArrayBufferView, or ArrayBuffer");
+        throw $ERR_INVALID_ARG_TYPE("chunk", ["string", "ArrayBufferView", "ArrayBuffer"], chunk);
       }
 
       const prom = writer.write(chunk);
@@ -678,26 +687,31 @@ async function writeFileAsyncIterator(fdOrPath, iterable, optionsOrEncoding, fla
 
   let totalBytesWritten = 0;
 
+  let error: Error | undefined;
+
   try {
     totalBytesWritten = await writeFileAsyncIteratorInner(fdOrPath, iterable, encoding, signal);
-  } finally {
-    if (mustClose) {
+  } catch (err) {
+    error = err as Error;
+  }
+
+  // Handle cleanup outside of try-catch
+  if (mustClose) {
+    if (typeof flag === "string" && !flag.includes("a")) {
       try {
-        if (typeof flag === "string" && !flag.includes("a")) {
-          await fs.ftruncate(fdOrPath, totalBytesWritten);
-        }
-      } finally {
-        await fs.close(fdOrPath);
-        // abort signal shadows other errors
-        if (signal?.aborted) {
-          throw signal.reason;
-        }
-      }
-    } else {
-      // abort signal shadows other errors
-      if (signal?.aborted) {
-        throw signal.reason;
-      }
+        await fs.ftruncate(fdOrPath, totalBytesWritten);
+      } catch {}
     }
+
+    await fs.close(fdOrPath);
+  }
+
+  // Abort signal shadows other errors
+  if (signal?.aborted) {
+    error = signal.reason;
+  }
+
+  if (error) {
+    throw error;
   }
 }

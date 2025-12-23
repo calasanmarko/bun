@@ -1,17 +1,11 @@
-const std = @import("std");
-const bun = @import("root").bun;
-const JSC = bun.JSC;
-const picohttp = JSC.WebCore.picohttp;
-const S3Error = @import("./error.zig").S3Error;
-const S3Credentials = @import("./credentials.zig").S3Credentials;
-const SignResult = S3Credentials.SignResult;
-const strings = bun.strings;
-const log = bun.Output.scoped(.S3, true);
+const log = bun.Output.scoped(.S3, .hidden);
 pub const S3HttpDownloadStreamingTask = struct {
+    pub const new = bun.TrivialNew(@This());
+
     http: bun.http.AsyncHTTP,
-    vm: *JSC.VirtualMachine,
+    vm: *jsc.VirtualMachine,
     sign_result: SignResult,
-    headers: JSC.WebCore.Headers,
+    headers: bun.http.Headers,
     callback_context: *anyopaque,
     // this transfers ownership from the chunk
     callback: *const fn (chunk: bun.MutableString, has_more: bool, err: ?S3Error, *anyopaque) void,
@@ -37,11 +31,10 @@ pub const S3HttpDownloadStreamingTask = struct {
     },
     state: State.AtomicType = State.AtomicType.init(@bitCast(State{})),
 
-    concurrent_task: JSC.ConcurrentTask = .{},
+    concurrent_task: jsc.ConcurrentTask = .{},
     range: ?[]const u8,
     proxy_url: []const u8,
 
-    pub usingnamespace bun.New(@This());
     pub const State = packed struct(u64) {
         pub const AtomicType = std.atomic.Value(u64);
         status_code: u32 = 0,
@@ -72,8 +65,7 @@ pub const S3HttpDownloadStreamingTask = struct {
         if (this.proxy_url.len > 0) {
             bun.default_allocator.free(this.proxy_url);
         }
-
-        this.destroy();
+        bun.destroy(this);
     }
 
     fn reportProgress(this: *@This(), state: State) void {
@@ -214,7 +206,7 @@ pub const S3HttpDownloadStreamingTask = struct {
             if (result.body) |body| {
                 this.response_buffer = body.*;
                 if (body.list.items.len > 0) {
-                    _ = this.reported_response_buffer.write(body.list.items) catch bun.outOfMemory();
+                    _ = bun.handleOom(this.reported_response_buffer.write(body.list.items));
                 }
                 this.response_buffer.reset();
                 if (this.reported_response_buffer.list.items.len == 0 and !is_done) {
@@ -240,3 +232,13 @@ pub const S3HttpDownloadStreamingTask = struct {
         }
     }
 };
+
+const std = @import("std");
+const S3Error = @import("./error.zig").S3Error;
+
+const S3Credentials = @import("./credentials.zig").S3Credentials;
+const SignResult = S3Credentials.SignResult;
+
+const bun = @import("bun");
+const jsc = bun.jsc;
+const strings = bun.strings;

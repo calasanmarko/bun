@@ -23,7 +23,7 @@ class DOMWrapperWorld;
 #include <wtf/StdLibExtras.h>
 #include "WebCoreJSBuiltins.h"
 #include "JSCTaskScheduler.h"
-
+#include "HTTPHeaderIdentifiers.h"
 namespace Zig {
 }
 
@@ -36,7 +36,7 @@ enum class UseCustomHeapCellType { Yes,
 
 class JSHeapData {
     WTF_MAKE_NONCOPYABLE(JSHeapData);
-    WTF_MAKE_FAST_ALLOCATED;
+    WTF_DEPRECATED_MAKE_FAST_ALLOCATED(JSHeapData);
     friend class JSVMClientData;
 
 public:
@@ -58,7 +58,9 @@ public:
 
     JSC::IsoHeapCellType m_heapCellTypeForJSWorkerGlobalScope;
     JSC::IsoHeapCellType m_heapCellTypeForNodeVMGlobalObject;
+    JSC::IsoHeapCellType m_heapCellTypeForNapiHandleScopeImpl;
     JSC::IsoHeapCellType m_heapCellTypeForBakeGlobalObject;
+    // JSC::IsoHeapCellType m_heapCellTypeForGeneratedClass;
 
 private:
     Lock m_lock;
@@ -76,7 +78,7 @@ DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(JSVMClientData);
 
 class JSVMClientData : public JSC::VM::ClientData {
     WTF_MAKE_NONCOPYABLE(JSVMClientData);
-    WTF_MAKE_FAST_ALLOCATED_WITH_HEAP_IDENTIFIER(JSVMClientData);
+    WTF_DEPRECATED_MAKE_FAST_ALLOCATED_WITH_HEAP_IDENTIFIER(JSVMClientData, JSVMClientData);
 
 public:
     explicit JSVMClientData(JSC::VM&, RefPtr<JSC::SourceProvider>);
@@ -104,6 +106,8 @@ public:
 
     JSC::GCClient::IsoSubspace& domBuiltinConstructorSpace() { return m_domBuiltinConstructorSpace; }
 
+    WebCore::HTTPHeaderIdentifiers& httpHeaderIdentifiers();
+
     template<typename Func> void forEachOutputConstraintSpace(const Func& func)
     {
         for (auto* space : m_outputConstraintSpaces)
@@ -128,6 +132,8 @@ private:
 
     std::unique_ptr<ExtendedDOMClientIsoSubspaces> m_clientSubspaces;
     Vector<JSC::IsoSubspace*> m_outputConstraintSpaces;
+
+    std::optional<WebCore::HTTPHeaderIdentifiers> m_httpHeaderIdentifiers;
 };
 
 } // namespace WebCore

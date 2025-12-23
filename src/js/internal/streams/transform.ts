@@ -47,8 +47,8 @@ const { getHighWaterMark } = require("internal/streams/state");
 
 const kCallback = Symbol("kCallback");
 
-function Transform(options) {
-  if (!(this instanceof Transform)) return Reflect.construct(Transform, [options]);
+function Transform(options): void {
+  if (!(this instanceof Transform)) return new Transform(options);
 
   // TODO (ronag): This should preferably always be
   // applied but would be semver-major. Or even better;
@@ -125,7 +125,7 @@ function prefinish() {
 
 Transform.prototype._final = final;
 
-Transform.prototype._transform = function (chunk, encoding, callback) {
+Transform.prototype._transform = function (_chunk, _encoding, _callback) {
   throw $ERR_METHOD_NOT_IMPLEMENTED("_transform()");
 };
 
@@ -169,4 +169,4 @@ Transform.prototype._read = function () {
   }
 };
 
-export default Transform;
+export default Transform as unknown as typeof import("node:stream").Transform;

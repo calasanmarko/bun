@@ -13,8 +13,7 @@ const Readable = require("internal/streams/readable");
 const Duplex = require("internal/streams/duplex");
 const { destroyer } = require("internal/streams/destroy");
 const { isDestroyed, isReadable, isWritable, isWritableEnded } = require("internal/streams/utils");
-const { Buffer } = require("node:buffer");
-const { kEmptyObject, kGetNativeReadableProto } = require("internal/shared");
+const { kEmptyObject } = require("internal/shared");
 const { validateBoolean, validateObject } = require("internal/validators");
 const finished = require("internal/streams/end-of-stream");
 
@@ -24,9 +23,9 @@ const ArrayPrototypeFilter = Array.prototype.filter;
 const ArrayPrototypeMap = Array.prototype.map;
 const ObjectEntries = Object.entries;
 const PromiseWithResolvers = Promise.withResolvers.bind(Promise);
-const PromiseResolve = Promise.resolve.bind(Promise);
-const PromisePrototypeThen = Promise.prototype.then;
-const SafePromisePrototypeFinally = Promise.prototype.finally;
+const PromiseResolve = Promise.$resolve.bind(Promise);
+const PromisePrototypeThen = $Promise.prototype.$then;
+const SafePromisePrototypeFinally = $Promise.prototype.finally;
 
 const constants_zlib = $processBindingConstants.zlib;
 
@@ -98,7 +97,7 @@ class ReadableFromWeb extends Readable {
       return;
     }
 
-    var deferredError;
+    var deferredError: Error | undefined;
     try {
       do {
         var done = false,
@@ -134,10 +133,10 @@ class ReadableFromWeb extends Readable {
         }
       } while (!this.#closed);
     } catch (e) {
-      deferredError = e;
-    } finally {
-      if (deferredError) throw deferredError;
+      deferredError = e as Error;
     }
+
+    if (deferredError) throw deferredError;
   }
 
   _destroy(error, callback) {
@@ -164,7 +163,7 @@ class ReadableFromWeb extends Readable {
 const encoder = new TextEncoder();
 
 // Collect all negative (error) ZLIB codes and Z_NEED_DICT
-const ZLIB_FAILURES = new SafeSet([
+const ZLIB_FAILURES: Set<string> = new SafeSet([
   ...ArrayPrototypeFilter.$call(
     ArrayPrototypeMap.$call(ObjectEntries(constants_zlib), ({ 0: code, 1: value }) => (value < 0 ? code : null)),
     Boolean,
@@ -511,7 +510,7 @@ function newReadableStreamFromStreamReadable(streamReadable, options = kEmptyObj
   );
 }
 
-function newStreamReadableFromReadableStream(readableStream, options = kEmptyObject) {
+function newStreamReadableFromReadableStream(readableStream, options: Record<string, unknown> = kEmptyObject) {
   if (!$inheritsReadableStream(readableStream)) {
     throw $ERR_INVALID_ARG_TYPE("readableStream", "ReadableStream", readableStream);
   }

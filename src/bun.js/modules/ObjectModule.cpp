@@ -26,7 +26,7 @@ generateObjectModuleSourceCode(JSC::JSGlobalObject* globalObject,
 
             auto scope = DECLARE_CATCH_SCOPE(vm);
             JSValue value = object->get(globalObject, entry);
-            if (scope.exception()) {
+            if (scope.exception()) [[unlikely]] {
                 scope.clearException();
                 value = jsUndefined();
             }
@@ -45,14 +45,18 @@ generateObjectModuleSourceCodeForJSON(JSC::JSGlobalObject* globalObject,
                Vector<JSC::Identifier, 4>& exportNames,
                JSC::MarkedArgumentBuffer& exportValues) -> void {
         auto& vm = JSC::getVM(lexicalGlobalObject);
+        auto scope = DECLARE_THROW_SCOPE(vm);
         GlobalObject* globalObject = reinterpret_cast<GlobalObject*>(lexicalGlobalObject);
         JSC::EnsureStillAliveScope stillAlive(object);
 
         PropertyNameArray properties(vm, PropertyNameMode::Strings,
             PrivateSymbolMode::Exclude);
-        object->getPropertyNames(globalObject, properties,
-            DontEnumPropertiesMode::Exclude);
+        object->getPropertyNames(globalObject, properties, DontEnumPropertiesMode::Exclude);
+        RETURN_IF_EXCEPTION(scope, {});
         gcUnprotectNullTolerant(object);
+
+        exportNames.append(vm.propertyNames->defaultKeyword);
+        exportValues.append(object);
 
         for (auto& entry : properties) {
             if (entry == vm.propertyNames->defaultKeyword) {
@@ -61,17 +65,10 @@ generateObjectModuleSourceCodeForJSON(JSC::JSGlobalObject* globalObject,
 
             exportNames.append(entry);
 
-            auto scope = DECLARE_CATCH_SCOPE(vm);
             JSValue value = object->get(globalObject, entry);
-            if (scope.exception()) {
-                scope.clearException();
-                value = jsUndefined();
-            }
+            RETURN_IF_EXCEPTION(scope, {});
             exportValues.append(value);
         }
-
-        exportNames.append(vm.propertyNames->defaultKeyword);
-        exportValues.append(object);
     };
 }
 

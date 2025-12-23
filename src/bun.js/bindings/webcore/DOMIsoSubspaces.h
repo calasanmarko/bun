@@ -11,7 +11,7 @@ using namespace JSC;
 
 class DOMIsoSubspaces {
     WTF_MAKE_NONCOPYABLE(DOMIsoSubspaces);
-    WTF_MAKE_FAST_ALLOCATED(DOMIsoSubspaces);
+    WTF_DEPRECATED_MAKE_FAST_ALLOCATED(DOMIsoSubspaces);
 
 public:
     DOMIsoSubspaces() = default;
@@ -35,8 +35,13 @@ public:
     std::unique_ptr<IsoSubspace> m_subspaceForImportMeta;
     std::unique_ptr<IsoSubspace> m_subspaceForRequireResolveFunction;
     std::unique_ptr<IsoSubspace> m_subspaceForBundlerPlugin;
+    std::unique_ptr<IsoSubspace> m_subspaceForNodeVMGlobalObject;
+    std::unique_ptr<IsoSubspace> m_subspaceForNodeVMSpecialSandbox;
     std::unique_ptr<IsoSubspace> m_subspaceForNodeVMScript;
-    std::unique_ptr<IsoSubspace> m_subspaceForCommonJSModuleRecord;
+    std::unique_ptr<IsoSubspace> m_subspaceForNodeVMSourceTextModule;
+    std::unique_ptr<IsoSubspace> m_subspaceForNodeVMSyntheticModule;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSCommonJSModule;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSCommonJSExtensions;
     std::unique_ptr<IsoSubspace> m_subspaceForJSMockImplementation;
     std::unique_ptr<IsoSubspace> m_subspaceForJSModuleMock;
     std::unique_ptr<IsoSubspace> m_subspaceForJSMockFunction;
@@ -56,11 +61,15 @@ public:
     std::unique_ptr<IsoSubspace> m_subspaceForV8GlobalInternals;
     std::unique_ptr<IsoSubspace> m_subspaceForHandleScopeBuffer;
     std::unique_ptr<IsoSubspace> m_subspaceForFunctionTemplate;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSMIMEType;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSMIMEParams;
     std::unique_ptr<IsoSubspace> m_subspaceForV8Function;
-    std::unique_ptr<IsoSubspace> m_subspaceForNodeVMGlobalObject;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSNodeHTTPServerSocket;
     std::unique_ptr<IsoSubspace> m_subspaceForJSS3Bucket;
     std::unique_ptr<IsoSubspace> m_subspaceForJSS3File;
     std::unique_ptr<IsoSubspace> m_subspaceForJSX509Certificate;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSNodePerformanceHooksHistogram;
+    std::unique_ptr<IsoSubspace> m_subspaceForWasmStreamingCompiler;
 #include "ZigGeneratedClasses+DOMIsoSubspaces.h"
     /*-- BUN --*/
 
@@ -257,6 +266,8 @@ public:
     std::unique_ptr<IsoSubspace> m_subspaceForReadableStreamSource;
     std::unique_ptr<IsoSubspace> m_subspaceForTransformStream;
     std::unique_ptr<IsoSubspace> m_subspaceForTransformStreamDefaultController;
+    std::unique_ptr<IsoSubspace> m_subspaceForCompressionStream;
+    std::unique_ptr<IsoSubspace> m_subspaceForDecompressionStream;
     std::unique_ptr<IsoSubspace> m_subspaceForWritableStream;
     std::unique_ptr<IsoSubspace> m_subspaceForWritableStreamDefaultController;
     std::unique_ptr<IsoSubspace> m_subspaceForWritableStreamDefaultWriter;
@@ -919,12 +930,33 @@ public:
     std::unique_ptr<IsoSubspace> m_subspaceForURLSearchParams;
     std::unique_ptr<IsoSubspace> m_subspaceForURLSearchParamsIterator;
 
+    std::unique_ptr<IsoSubspace> m_subspaceForCookie;
+    std::unique_ptr<IsoSubspace> m_subspaceForCookieMap;
+    std::unique_ptr<IsoSubspace> m_subspaceForCookieMapIterator;
+
     std::unique_ptr<IsoSubspace> m_subspaceForDOMException;
     // std::unique_ptr<IsoSubspace> m_subspaceForDOMFormData;
     // std::unique_ptr<IsoSubspace> m_subspaceForDOMFormDataIterator;
     std::unique_ptr<IsoSubspace> m_subspaceForDOMURL;
+    std::unique_ptr<IsoSubspace> m_subspaceForURLPattern;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSSign;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSVerify;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSHmac;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSHash;
     std::unique_ptr<IsoSubspace> m_subspaceForServerRouteList;
     std::unique_ptr<IsoSubspace> m_subspaceForBunRequest;
+    std::unique_ptr<IsoSubspace> m_subspaceForBakeResponse;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSDiffieHellman;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSDiffieHellmanGroup;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSECDH;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSCipher;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSKeyObject;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSSecretKeyObject;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSPublicKeyObject;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSPrivateKeyObject;
+
+    std::unique_ptr<IsoSubspace> m_subspaceForJSConnectionsList;
+    std::unique_ptr<IsoSubspace> m_subspaceForJSHTTPParser;
 };
 } // namespace WebCore
 

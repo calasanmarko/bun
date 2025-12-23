@@ -1,10 +1,8 @@
 const { hideFromStack } = require("internal/shared");
 
 const RegExpPrototypeExec = RegExp.prototype.exec;
-const ArrayPrototypeIncludes = Array.prototype.includes;
-const ArrayPrototypeJoin = Array.prototype.join;
-const ArrayPrototypeMap = Array.prototype.map;
 const ArrayIsArray = Array.isArray;
+const ObjectPrototypeHasOwnProperty = Object.prototype.hasOwnProperty;
 
 const tokenRegExp = /^[\^_`a-zA-Z\-0-9!#$%&'*+.|~]+$/;
 /**
@@ -66,56 +64,51 @@ function validateLinkHeaderValue(hints) {
     `must be an array or string of format "</styles.css>; rel=preload; as=style"`,
   );
 }
-hideFromStack(validateLinkHeaderValue);
-// TODO: do it in NodeValidator.cpp
-function validateObject(value: unknown, name: string): asserts value is object {
-  if (typeof value !== "object" || value === null) throw $ERR_INVALID_ARG_TYPE(name, "object", value);
-}
-hideFromStack(validateObject);
 
-function validateOneOf(value, name, oneOf) {
-  if (!ArrayPrototypeIncludes.$call(oneOf, value)) {
-    const allowed = ArrayPrototypeJoin.$call(
-      ArrayPrototypeMap.$call(oneOf, v => (typeof v === "string" ? `'${v}'` : String(v))),
-      ", ",
-    );
-    const reason = "must be one of: " + allowed;
-    throw $ERR_INVALID_ARG_VALUE(name, value, reason);
+function validateString(value, name) {
+  if (typeof value !== "string") throw $ERR_INVALID_ARG_TYPE(name, "string", value);
+}
+
+function validateFunction(value, name) {
+  if (typeof value !== "function") throw $ERR_INVALID_ARG_TYPE(name, "function", value);
+}
+
+function validateBoolean(value, name) {
+  if (typeof value !== "boolean") throw $ERR_INVALID_ARG_TYPE(name, "boolean", value);
+}
+
+function validateUndefined(value, name) {
+  if (value !== undefined) throw $ERR_INVALID_ARG_TYPE(name, "undefined", value);
+}
+
+function validateInternalField(object, fieldKey, className) {
+  if (typeof object !== "object" || object === null || !ObjectPrototypeHasOwnProperty.$call(object, fieldKey)) {
+    throw $ERR_INVALID_ARG_TYPE("this", className, object);
   }
 }
-hideFromStack(validateOneOf);
+
+hideFromStack(validateLinkHeaderValue, validateInternalField);
+hideFromStack(validateString, validateFunction, validateBoolean, validateUndefined);
 
 export default {
-  validateObject: validateObject,
+  /** (value, name) */
+  validateObject: $newCppFunction("NodeValidator.cpp", "jsFunction_validateObject", 2),
   validateLinkHeaderValue: validateLinkHeaderValue,
   checkIsHttpToken: checkIsHttpToken,
-  /**
-   * @param value the value that should be an int
-   * @paran name the name of the parameter. Used when creating error codes
-   * @param min minimum value, inclusive. Defaults to {@link Number.MIN_SAFE_INTEGER}.
-   * @param max maximum value, inclusive. Defaults to {@link Number.MAX_SAFE_INTEGER}.
-   *
-   * @throws if `value` is not an int
-   * @throws if `value` is outside `[min, max]`
-   */
+  /** `(value, name, min, max)` */
   validateInteger: $newCppFunction("NodeValidator.cpp", "jsFunction_validateInteger", 0),
-  /**
-   * @param value the value that should be an int
-   * @paran name the name of the parameter. Used when creating error codes
-   * @param min minimum value, exclusive. Defaults to {@link Number.MIN_SAFE_INTEGER}.
-   * @param max maximum value, exclusive. Defaults to {@link Number.MAX_SAFE_INTEGER}.
-   */
+  /** `(value, name, min, max)` */
   validateNumber: $newCppFunction("NodeValidator.cpp", "jsFunction_validateNumber", 0),
   /** `(value, name)` */
-  validateString: $newCppFunction("NodeValidator.cpp", "jsFunction_validateString", 0),
+  validateString,
   /** `(number, name)` */
   validateFiniteNumber: $newCppFunction("NodeValidator.cpp", "jsFunction_validateFiniteNumber", 0),
   /** `(number, name, lower, upper, def)` */
   checkRangesOrGetDefault: $newCppFunction("NodeValidator.cpp", "jsFunction_checkRangesOrGetDefault", 0),
   /** `(value, name)` */
-  validateFunction: $newCppFunction("NodeValidator.cpp", "jsFunction_validateFunction", 0),
+  validateFunction,
   /** `(value, name)` */
-  validateBoolean: $newCppFunction("NodeValidator.cpp", "jsFunction_validateBoolean", 0),
+  validateBoolean,
   /** `(port, name = 'Port', allowZero = true)` */
   validatePort: $newCppFunction("NodeValidator.cpp", "jsFunction_validatePort", 0),
   /** `(signal, name)` */
@@ -133,9 +126,12 @@ export default {
   /** `(value, name)` */
   validatePlainFunction: $newCppFunction("NodeValidator.cpp", "jsFunction_validatePlainFunction", 0),
   /** `(value, name)` */
-  validateUndefined: $newCppFunction("NodeValidator.cpp", "jsFunction_validateUndefined", 0),
+  validateUndefined,
   /** `(buffer, name = 'buffer')` */
   validateBuffer: $newCppFunction("NodeValidator.cpp", "jsFunction_validateBuffer", 0),
   /** `(value, name, oneOf)` */
-  validateOneOf,
+  validateOneOf: $newCppFunction("NodeValidator.cpp", "jsFunction_validateOneOf", 0),
+  isUint8Array: value => value instanceof Uint8Array,
+  /** `(object, fieldKey, className)` */
+  validateInternalField,
 };

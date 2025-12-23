@@ -1,27 +1,11 @@
-const std = @import("std");
-const bun = @import("root").bun;
 pub const css = @import("../css_parser.zig");
 const Result = css.Result;
-const ArrayList = std.ArrayListUnmanaged;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
 const CSSNumber = css.css_values.number.CSSNumber;
 const CSSNumberFns = css.css_values.number.CSSNumberFns;
 const Calc = css.css_values.calc.Calc;
-const DimensionPercentage = css.css_values.percentage.DimensionPercentage;
-const LengthPercentage = css.css_values.length.LengthPercentage;
-const Length = css.css_values.length.Length;
-const Percentage = css.css_values.percentage.Percentage;
-const CssColor = css.css_values.color.CssColor;
-const Image = css.css_values.image.Image;
-const Url = css.css_values.url.Url;
-const CSSInteger = css.css_values.number.CSSInteger;
-const CSSIntegerFns = css.css_values.number.CSSIntegerFns;
 const Angle = css.css_values.angle.Angle;
-const Resolution = css.css_values.resolution.Resolution;
-const CustomIdent = css.css_values.ident.CustomIdent;
-const CustomIdentFns = css.css_values.ident.CustomIdentFns;
-const Ident = css.css_values.ident.Ident;
 
 /// A CSS [`<time>`](https://www.w3.org/TR/css-values-4/#time) value, in either
 /// seconds or milliseconds.
@@ -82,25 +66,25 @@ pub const Time = union(Tag) {
         }
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *css.Printer) css.PrintErr!void {
         // 0.1s is shorter than 100ms
         // anything smaller is longer
         switch (this.*) {
             .seconds => |s| {
                 if (s > 0.0 and s < 0.1) {
-                    try CSSNumberFns.toCss(&(s * 1000.0), W, dest);
+                    try CSSNumberFns.toCss(&(s * 1000.0), dest);
                     try dest.writeStr("ms");
                 } else {
-                    try CSSNumberFns.toCss(&s, W, dest);
+                    try CSSNumberFns.toCss(&s, dest);
                     try dest.writeStr("s");
                 }
             },
             .milliseconds => |ms| {
                 if (ms == 0.0 or ms >= 100.0) {
-                    try CSSNumberFns.toCss(&(ms / 1000.0), W, dest);
+                    try CSSNumberFns.toCss(&(ms / 1000.0), dest);
                     try dest.writeStr("s");
                 } else {
-                    try CSSNumberFns.toCss(&ms, W, dest);
+                    try CSSNumberFns.toCss(&ms, dest);
                     try dest.writeStr("ms");
                 }
             },
@@ -226,3 +210,6 @@ pub const Time = union(Tag) {
         };
     }
 };
+
+const bun = @import("bun");
+const std = @import("std");

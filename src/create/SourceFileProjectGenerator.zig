@@ -1,7 +1,9 @@
+const SourceFileProjectGenerator = @This();
+
 // Generate project files based on the entry point and dependencies
 pub fn generate(_: Command.Context, _: Example.Tag, entry_point: string, result: *BundleV2.DependenciesScanner.Result) !void {
     const react_component_export = findReactComponentExport(result.bundle_v2) orelse {
-        Output.errGeneric("No component export found in <b>{s}<r>", .{bun.fmt.quote(entry_point)});
+        Output.errGeneric("No component export found in <b>{f}<r>", .{bun.fmt.quote(entry_point)});
         Output.flush();
         const writer = Output.errorWriterBuffered();
         try writer.writeAll(
@@ -77,9 +79,9 @@ pub fn generate(_: Command.Context, _: Example.Tag, entry_point: string, result:
 }
 
 // Create a file with given contents, returns if file was newly created
-fn createFile(filename: []const u8, contents: []const u8) bun.JSC.Maybe(bool) {
+fn createFile(filename: []const u8, contents: []const u8) bun.sys.Maybe(bool) {
     // Check if file exists and has same contents
-    if (bun.sys.File.readFrom(bun.toFD(std.fs.cwd()), filename, default_allocator).asValue()) |source_contents| {
+    if (bun.sys.File.readFrom(bun.FD.cwd(), filename, default_allocator).asValue()) |source_contents| {
         defer default_allocator.free(source_contents);
         if (strings.eqlLong(source_contents, contents, true)) {
             return .{ .result = false };
@@ -92,11 +94,11 @@ fn createFile(filename: []const u8, contents: []const u8) bun.JSC.Maybe(bool) {
     }
 
     // Open file for writing
-    const fd = switch (bun.sys.openatA(bun.toFD(std.fs.cwd()), filename, bun.O.WRONLY | bun.O.CREAT | bun.O.TRUNC, 0o644)) {
+    const fd = switch (bun.sys.openatA(.cwd(), filename, bun.O.WRONLY | bun.O.CREAT | bun.O.TRUNC, 0o644)) {
         .result => |fd| fd,
         .err => |err| return .{ .err = err },
     };
-    defer _ = bun.sys.close(fd);
+    defer fd.close();
 
     // Write contents
     switch (bun.sys.File.writeAll(.{ .handle = fd }, contents)) {
@@ -123,7 +125,7 @@ fn countReplaceAllOccurrences(input: []const u8, needle: []const u8, replacement
 
 // Replace all occurrences of needle with replacement
 fn replaceAllOccurrencesOfString(allocator: std.mem.Allocator, input: []const u8, needle: []const u8, replacement: []const u8) ![]u8 {
-    var result = try std.ArrayList(u8).initCapacity(allocator, countReplaceAllOccurrences(input, needle, replacement));
+    var result = try std.array_list.Managed(u8).initCapacity(allocator, countReplaceAllOccurrences(input, needle, replacement));
     var remaining = input;
     while (remaining.len > 0) {
         if (std.mem.indexOf(u8, remaining, needle)) |index| {
@@ -220,7 +222,7 @@ pub fn generateFiles(allocator: std.mem.Allocator, entry_point: string, dependen
 
     if (dependencies.len > 0) {
         // Install dependencies
-        var argv = std.ArrayList([]const u8).init(default_allocator);
+        var argv = std.array_list.Managed([]const u8).init(default_allocator);
         try argv.append("bun");
         try argv.append("--only-missing");
         try argv.append("install");
@@ -246,7 +248,7 @@ pub fn generateFiles(allocator: std.mem.Allocator, entry_point: string, dependen
             .stdin = .inherit,
 
             .windows = if (Environment.isWindows) .{
-                .loop = bun.JSC.EventLoopHandle.init(bun.JSC.MiniEventLoop.initGlobal(null)),
+                .loop = bun.jsc.EventLoopHandle.init(bun.jsc.MiniEventLoop.initGlobal(null, null)),
             },
         }) catch |err| {
             Output.err(err, "failed to install dependencies", .{});
@@ -282,7 +284,7 @@ pub fn generateFiles(allocator: std.mem.Allocator, entry_point: string, dependen
         .ReactShadcnSpa => |*shadcn| {
             if (shadcn.components.keys().len > 0) {
                 // Add shadcn components
-                var shadcn_argv = try std.ArrayList([]const u8).initCapacity(default_allocator, 10);
+                var shadcn_argv = try std.array_list.Managed([]const u8).initCapacity(default_allocator, 10);
                 try shadcn_argv.append("bun");
                 try shadcn_argv.append("x");
                 try shadcn_argv.append("shadcn@canary");
@@ -359,7 +361,7 @@ pub fn generateFiles(allocator: std.mem.Allocator, entry_point: string, dependen
         .stdin = .inherit,
 
         .windows = if (Environment.isWindows) .{
-            .loop = bun.JSC.EventLoopHandle.init(bun.JSC.MiniEventLoop.initGlobal(null)),
+            .loop = bun.jsc.EventLoopHandle.init(bun.jsc.MiniEventLoop.initGlobal(null, null)),
         },
     }) catch |err| {
         Output.err(err, "failed to start app", .{});
@@ -529,7 +531,7 @@ fn findReactComponentExport(bundler: *BundleV2) ?[]const u8 {
             }
 
             if (filename[0] >= 'a' and filename[0] <= 'z') {
-                const duped = default_allocator.dupe(u8, filename) catch bun.outOfMemory();
+                const duped = bun.handleOom(default_allocator.dupe(u8, filename));
                 duped[0] = duped[0] - 32;
                 if (bun.js_lexer.isIdentifier(duped)) {
                     if (exports.contains(duped)) {
@@ -616,32 +618,6 @@ fn findReactComponentExport(bundler: *BundleV2) ?[]const u8 {
     return null;
 }
 
-const bun = @import("root").bun;
-const string = bun.string;
-const Output = bun.Output;
-const Global = bun.Global;
-const Environment = bun.Environment;
-const strings = bun.strings;
-const MutableString = bun.MutableString;
-const stringZ = bun.stringZ;
-const default_allocator = bun.default_allocator;
-const C = bun.C;
-const std = @import("std");
-const Progress = bun.Progress;
-
-const lex = bun.js_lexer;
-const logger = bun.logger;
-
-const js_parser = bun.js_parser;
-const js_ast = bun.JSAst;
-const linker = @import("../linker.zig");
-
-const Api = @import("../api/schema.zig").Api;
-const resolve_path = @import("../resolver/resolve_path.zig");
-const BundleV2 = bun.bundle_v2.BundleV2;
-const Command = bun.CLI.Command;
-const Example = @import("../cli/create_command.zig").Example;
-
 // Disabled until Tailwind v4 is supported.
 const enable_shadcn_ui = true;
 
@@ -666,22 +642,22 @@ const Reason = enum {
 const ReactTailwindSpa = struct {
     pub const files = &[_]TemplateFile{
         .{
-            .name = "src/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.build.ts",
+            .name = "REPLACE_ME_WITH_YOUR_APP_FILE_NAME.build.ts",
             .content = shared_build_ts,
             .reason = .build,
         },
         .{
-            .name = "src/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.css",
+            .name = "REPLACE_ME_WITH_YOUR_APP_FILE_NAME.css",
             .content = @embedFile("projects/react-tailwind-spa/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.css"),
             .reason = .css,
         },
         .{
-            .name = "src/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.html",
+            .name = "REPLACE_ME_WITH_YOUR_APP_FILE_NAME.html",
             .content = shared_html,
             .reason = .html,
         },
         .{
-            .name = "src/client.tsx",
+            .name = "REPLACE_ME_WITH_YOUR_APP_FILE_NAME.client.tsx",
             .content = shared_client_tsx,
             .reason = .bun,
         },
@@ -707,29 +683,28 @@ const shared_client_tsx = @embedFile("projects/react-shadcn-spa/REPLACE_ME_WITH_
 const shared_html = @embedFile("projects/react-shadcn-spa/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.html");
 const shared_package_json = @embedFile("projects/react-shadcn-spa/package.json");
 const shared_bunfig_toml = @embedFile("projects/react-shadcn-spa/bunfig.toml");
-const shared_index_tsx = @embedFile("projects/react-spa/index.tsx");
 
 // Template for basic React project
 const ReactSpa = struct {
     pub const files = &[_]TemplateFile{
         .{
-            .name = "src/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.build.ts",
+            .name = "REPLACE_ME_WITH_YOUR_APP_FILE_NAME.build.ts",
             .content = shared_build_ts,
             .reason = .build,
         },
         .{
-            .name = "src/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.css",
+            .name = "REPLACE_ME_WITH_YOUR_APP_FILE_NAME.css",
             .content = @embedFile("projects/react-spa/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.css"),
             .reason = .css,
             .overwrite = false,
         },
         .{
-            .name = "src/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.html",
+            .name = "REPLACE_ME_WITH_YOUR_APP_FILE_NAME.html",
             .content = shared_html,
             .reason = .html,
         },
         .{
-            .name = "src/client.tsx",
+            .name = "REPLACE_ME_WITH_YOUR_APP_FILE_NAME.client.tsx",
             .content = shared_client_tsx,
             .reason = .bun,
         },
@@ -751,32 +726,32 @@ const ReactShadcnSpa = struct {
             .reason = .shadcn,
         },
         .{
-            .name = "src/index.css",
+            .name = "index.css",
             .content = @embedFile("projects/react-shadcn-spa/styles/index.css"),
             .reason = .shadcn,
         },
         .{
-            .name = "src/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.build.ts",
+            .name = "REPLACE_ME_WITH_YOUR_APP_FILE_NAME.build.ts",
             .content = shared_build_ts,
             .reason = .bun,
         },
         .{
-            .name = "src/client.tsx",
+            .name = "REPLACE_ME_WITH_YOUR_APP_FILE_NAME.client.tsx",
             .content = shared_client_tsx,
             .reason = .bun,
         },
         .{
-            .name = "src/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.css",
+            .name = "REPLACE_ME_WITH_YOUR_APP_FILE_NAME.css",
             .content = @embedFile("projects/react-shadcn-spa/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.css"),
             .reason = .css,
         },
         .{
-            .name = "src/REPLACE_ME_WITH_YOUR_APP_FILE_NAME.html",
+            .name = "REPLACE_ME_WITH_YOUR_APP_FILE_NAME.html",
             .content = shared_html,
             .reason = .html,
         },
         .{
-            .name = "src/styles/globals.css",
+            .name = "styles/globals.css",
             .content = @embedFile("projects/react-shadcn-spa/styles/globals.css"),
             .reason = .shadcn,
         },
@@ -874,4 +849,20 @@ pub const Template = union(Tag) {
     };
 };
 
-const SourceFileProjectGenerator = @This();
+const string = []const u8;
+
+const linker = @import("../linker.zig");
+const std = @import("std");
+const Example = @import("../cli/create_command.zig").Example;
+
+const bun = @import("bun");
+const Environment = bun.Environment;
+const Global = bun.Global;
+const MutableString = bun.MutableString;
+const Output = bun.Output;
+const default_allocator = bun.default_allocator;
+const js_ast = bun.ast;
+const logger = bun.logger;
+const strings = bun.strings;
+const BundleV2 = bun.bundle_v2.BundleV2;
+const Command = bun.cli.Command;

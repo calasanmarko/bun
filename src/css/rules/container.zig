@@ -1,13 +1,6 @@
-const std = @import("std");
 pub const css = @import("../css_parser.zig");
-const bun = @import("root").bun;
 const Result = css.Result;
-const ArrayList = std.ArrayListUnmanaged;
-const MediaList = css.MediaList;
-const CustomMedia = css.CustomMedia;
 const Printer = css.Printer;
-const Maybe = css.Maybe;
-const PrinterError = css.PrinterError;
 const PrintErr = css.PrintErr;
 const Location = css.css_rules.Location;
 const CustomIdent = css.css_values.ident.CustomIdent;
@@ -36,8 +29,8 @@ pub const ContainerName = struct {
 
     const This = @This();
 
-    pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
-        return try CustomIdentFns.toCss(&this.v, W, dest);
+    pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
+        return try CustomIdentFns.toCss(&this.v, dest);
     }
 
     pub fn deepClone(this: *const @This(), allocator: std.mem.Allocator) @This() {
@@ -62,7 +55,7 @@ pub const ContainerSizeFeatureId = enum {
     /// The [orientation](https://w3c.github.io/csswg-drafts/css-contain-3/#orientation) size container feature.
     orientation,
 
-    pub usingnamespace css.DeriveValueType(@This(), ValueTypeMap);
+    pub const valueType = css.DeriveValueType(@This(), ValueTypeMap).valueType;
 
     pub const ValueTypeMap = .{
         .width = css.MediaFeatureType.length,
@@ -81,13 +74,13 @@ pub const ContainerSizeFeatureId = enum {
         return css.enum_property_util.parse(@This(), input);
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *Printer(W)) PrintErr!void {
-        return css.enum_property_util.toCss(@This(), this, W, dest);
+    pub fn toCss(this: *const @This(), dest: *Printer) PrintErr!void {
+        return css.enum_property_util.toCss(@This(), this, dest);
     }
 
-    pub fn toCssWithPrefix(this: *const @This(), prefix: []const u8, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCssWithPrefix(this: *const @This(), prefix: []const u8, dest: *Printer) PrintErr!void {
         try dest.writeStr(prefix);
-        try this.toCss(W, dest);
+        try this.toCss(dest);
     }
 };
 
@@ -111,14 +104,13 @@ pub const StyleQuery = union(enum) {
         }
     },
 
-    pub fn toCss(this: *const StyleQuery, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const StyleQuery, dest: *Printer) PrintErr!void {
         switch (this.*) {
-            .feature => |f| try f.toCss(W, dest, false),
+            .feature => |f| try f.toCss(dest, false),
             .not => |c| {
                 try dest.writeStr("not ");
                 return try css.media_query.toCssWithParensIfNeeded(
                     c,
-                    W,
                     dest,
                     c.needsParens(null, &dest.targets),
                 );
@@ -127,7 +119,6 @@ pub const StyleQuery = union(enum) {
                 StyleQuery,
                 op.operator,
                 &op.conditions,
-                W,
                 dest,
             ),
         }
@@ -221,22 +212,21 @@ pub const ContainerCondition = union(enum) {
         );
     }
 
-    pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
         switch (this.*) {
-            .feature => |f| try f.toCss(W, dest),
+            .feature => |f| try f.toCss(dest),
             .not => |c| {
                 try dest.writeStr("not ");
                 return try css.media_query.toCssWithParensIfNeeded(
                     c,
-                    W,
                     dest,
                     c.needsParens(null, &dest.targets),
                 );
             },
-            .operation => |op| try css.media_query.operationToCss(ContainerCondition, op.operator, &op.conditions, W, dest),
+            .operation => |op| try css.media_query.operationToCss(ContainerCondition, op.operator, &op.conditions, dest),
             .style => |query| {
                 try dest.writeStr("style(");
-                try query.toCss(W, dest);
+                try query.toCss(dest);
                 try dest.writeChar(')');
             },
         }
@@ -322,27 +312,27 @@ pub fn ContainerRule(comptime R: type) type {
 
         const This = @This();
 
-        pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+        pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
             // #[cfg(feature = "sourcemap")]
             // dest.add_mapping(self.loc);
 
             try dest.writeStr("@container ");
             if (this.name) |*name| {
-                try name.toCss(W, dest);
+                try name.toCss(dest);
                 try dest.writeChar(' ');
             }
 
             // Don't downlevel range syntax in container queries.
             const exclude = dest.targets.exclude;
-            dest.targets.exclude.insert(css.targets.Features.media_queries);
-            try this.condition.toCss(W, dest);
+            bun.bits.insert(css.targets.Features, &dest.targets.exclude, .media_queries);
+            try this.condition.toCss(dest);
             dest.targets.exclude = exclude;
 
             try dest.whitespace();
             try dest.writeChar('{');
             dest.indent();
             try dest.newline();
-            try this.rules.toCss(W, dest);
+            try this.rules.toCss(dest);
             dest.dedent();
             try dest.newline();
             try dest.writeChar('}');
@@ -353,3 +343,8 @@ pub fn ContainerRule(comptime R: type) type {
         }
     };
 }
+
+const bun = @import("bun");
+
+const std = @import("std");
+const ArrayList = std.ArrayListUnmanaged;

@@ -59,7 +59,7 @@ JSC_DEFINE_HOST_FUNCTION(jsDomainToASCII, (JSC::JSGlobalObject * globalObject, J
     constexpr static size_t hostnameBufferLength = 2048;
 
     auto encoder = &WTF::URLParser::internationalDomainNameTranscoder();
-    UChar hostnameBuffer[hostnameBufferLength];
+    char16_t hostnameBuffer[hostnameBufferLength];
     UErrorCode error = U_ZERO_ERROR;
     UIDNAInfo processingDetails = UIDNA_INFO_INITIALIZER;
     const auto span = domain.span16();
@@ -68,8 +68,7 @@ JSC_DEFINE_HOST_FUNCTION(jsDomainToASCII, (JSC::JSGlobalObject * globalObject, J
     if (U_SUCCESS(error) && !(processingDetails.errors & ~allowedNameToASCIIErrors) && numCharactersConverted) {
         return JSC::JSValue::encode(JSC::jsString(vm, WTF::String(std::span { hostnameBuffer, static_cast<unsigned int>(numCharactersConverted) })));
     }
-    throwTypeError(globalObject, scope, "domainToASCII failed"_s);
-    return {};
+    return JSC::JSValue::encode(jsEmptyString(vm));
 }
 
 JSC_DEFINE_HOST_FUNCTION(jsDomainToUnicode, (JSC::JSGlobalObject * globalObject, JSC::CallFrame* callFrame))
@@ -128,7 +127,7 @@ JSC_DEFINE_HOST_FUNCTION(jsDomainToUnicode, (JSC::JSGlobalObject * globalObject,
     constexpr static int hostnameBufferLength = 2048;
 
     auto encoder = &WTF::URLParser::internationalDomainNameTranscoder();
-    UChar hostnameBuffer[hostnameBufferLength];
+    char16_t hostnameBuffer[hostnameBufferLength];
     UErrorCode error = U_ZERO_ERROR;
     UIDNAInfo processingDetails = UIDNA_INFO_INITIALIZER;
 
@@ -139,23 +138,29 @@ JSC_DEFINE_HOST_FUNCTION(jsDomainToUnicode, (JSC::JSGlobalObject * globalObject,
     if (U_SUCCESS(error) && !(processingDetails.errors & ~allowedNameToUnicodeErrors) && numCharactersConverted) {
         return JSC::JSValue::encode(JSC::jsString(vm, WTF::String(std::span { hostnameBuffer, static_cast<unsigned int>(numCharactersConverted) })));
     }
-    throwTypeError(globalObject, scope, "domainToUnicode failed"_s);
-    return {};
+    return JSC::JSValue::encode(jsEmptyString(vm));
 }
 
 JSC::JSValue createNodeURLBinding(Zig::GlobalObject* globalObject)
 {
     VM& vm = globalObject->vm();
+    auto scope = DECLARE_THROW_SCOPE(vm);
     auto binding = constructEmptyArray(globalObject, nullptr, 2);
+    RETURN_IF_EXCEPTION(scope, {});
+    ASSERT(binding);
+    auto domainToAsciiFunction = JSC::JSFunction::create(vm, globalObject, 1, "domainToAscii"_s, jsDomainToASCII, ImplementationVisibility::Public);
+    ASSERT(domainToAsciiFunction);
+    auto domainToUnicodeFunction = JSC::JSFunction::create(vm, globalObject, 1, "domainToUnicode"_s, jsDomainToUnicode, ImplementationVisibility::Public);
+    ASSERT(domainToUnicodeFunction);
     binding->putByIndexInline(
         globalObject,
         (unsigned)0,
-        JSC::JSFunction::create(vm, globalObject, 1, "domainToAscii"_s, jsDomainToASCII, ImplementationVisibility::Public),
+        domainToAsciiFunction,
         false);
     binding->putByIndexInline(
         globalObject,
         (unsigned)1,
-        JSC::JSFunction::create(vm, globalObject, 1, "domainToUnicode"_s, jsDomainToUnicode, ImplementationVisibility::Public),
+        domainToUnicodeFunction,
         false);
     return binding;
 }

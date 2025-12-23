@@ -5,22 +5,13 @@ pub const struct_internal_state = extern struct {
 };
 
 // https://zlib.net/manual.html#Stream
-const Byte = u8;
-const Bytef = Byte;
-const charf = u8;
-const intf = c_int;
-const uIntf = uInt;
-const uLongf = uLong;
-const voidpc = ?*const anyopaque;
 const voidpf = ?*anyopaque;
-const voidp = ?*anyopaque;
-const z_crc_t = c_uint;
 
 // typedef voidpf (*alloc_func) OF((voidpf opaque, uInt items, uInt size));
 // typedef void   (*free_func)  OF((voidpf opaque, voidpf address));
 
-pub const z_alloc_fn = ?*const fn (*anyopaque, uInt, uInt) callconv(.C) voidpf;
-pub const z_free_fn = ?*const fn (*anyopaque, *anyopaque) callconv(.C) void;
+pub const z_alloc_fn = ?*const fn (*anyopaque, uInt, uInt) callconv(.c) voidpf;
+pub const z_free_fn = ?*const fn (*anyopaque, *anyopaque) callconv(.c) void;
 
 pub const zStream_struct = extern struct {
     /// next input byte

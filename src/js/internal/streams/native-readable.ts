@@ -5,7 +5,7 @@
 // Normally, Readable.fromWeb will wrap the ReadableStream in JavaScript. In
 // Bun, `fromWeb` is able to check if the stream is backed by a native handle,
 // to which it will take this path.
-const Readable = require("node:stream").Readable;
+const Readable = require("internal/streams/readable");
 const transferToNativeReadable = $newCppFunction("ReadableStream.cpp", "jsFunctionTransferToNativeReadableStream", 1);
 const { errorOrDestroy } = require("internal/streams/destroy");
 
@@ -19,7 +19,8 @@ const kRemainingChunk = Symbol("remainingChunk");
 
 const MIN_BUFFER_SIZE = 512;
 let dynamicallyAdjustChunkSize = (_?) => (
-  (_ = process.env.BUN_DISABLE_DYNAMIC_CHUNK_SIZE !== "1"), (dynamicallyAdjustChunkSize = () => _)
+  (_ = process.env.BUN_DISABLE_DYNAMIC_CHUNK_SIZE !== "1"),
+  (dynamicallyAdjustChunkSize = () => _)
 );
 
 type NativeReadable = typeof import("node:stream").Readable &
@@ -181,7 +182,7 @@ function handleResult(stream: NativeReadable, result: any, chunk: Buffer, isClos
     process.nextTick(() => {
       stream.push(null);
     });
-    return (chunk?.byteLength ?? 0 > 0) ? chunk : undefined;
+    return (chunk?.byteLength ?? 0) > 0 ? chunk : undefined;
   } else if ($isTypedArrayView(result)) {
     if (result.byteLength >= stream[kHighWaterMark] && !stream[kHasResized] && !isClosed) {
       adjustHighWaterMark(stream);

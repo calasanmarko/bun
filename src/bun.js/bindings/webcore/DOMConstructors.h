@@ -198,6 +198,8 @@ enum class DOMConstructorID : uint16_t {
     ReadableStreamSource,
     TransformStream,
     TransformStreamDefaultController,
+    CompressionStream,
+    DecompressionStream,
     WritableStream,
     WritableStreamDefaultController,
     WritableStreamDefaultWriter,
@@ -855,24 +857,32 @@ enum class DOMConstructorID : uint16_t {
     XSLTProcessor,
 
     // --bun--
+    Cookie,
+    CookieMap,
     EventEmitter,
+    URLPattern,
 };
 
-static constexpr unsigned numberOfDOMConstructorsBase = 846;
+static constexpr unsigned numberOfDOMConstructorsBase = 848;
 
-static constexpr unsigned bunExtraConstructors = 1;
+static constexpr unsigned bunExtraConstructors = 4;
 
 static constexpr unsigned numberOfDOMConstructors = numberOfDOMConstructorsBase + bunExtraConstructors;
 
 class DOMConstructors {
     WTF_MAKE_NONCOPYABLE(DOMConstructors);
-    WTF_MAKE_FAST_ALLOCATED(DOMConstructors);
+    WTF_DEPRECATED_MAKE_FAST_ALLOCATED(DOMConstructors);
 
 public:
     using ConstructorArray = std::array<JSC::WriteBarrier<JSC::JSObject>, numberOfDOMConstructors>;
     DOMConstructors() = default;
     ConstructorArray& array() { return m_array; }
     const ConstructorArray& array() const { return m_array; }
+    template<typename Visitor>
+    void visit(Visitor& visitor)
+    {
+        visitor.append(m_array.begin(), m_array.end());
+    }
 
 private:
     ConstructorArray m_array {};

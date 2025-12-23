@@ -1,23 +1,11 @@
-const bun = @import("root").bun;
-const JSC = bun.JSC;
-const std = @import("std");
-const Flavor = JSC.Node.Flavor;
-const ArgumentsSlice = JSC.Node.ArgumentsSlice;
-const system = std.posix.system;
-const Maybe = JSC.Maybe;
-const Encoding = JSC.Node.Encoding;
-const FeatureFlags = bun.FeatureFlags;
-const Args = JSC.Node.NodeFS.Arguments;
-const d = JSC.d;
+const NodeFSFunction = fn (this: *jsc.Node.fs.Binding, globalObject: *jsc.JSGlobalObject, callframe: *jsc.CallFrame) bun.JSError!jsc.JSValue;
 
-const NodeFSFunction = fn (this: *JSC.Node.NodeJSFS, globalObject: *JSC.JSGlobalObject, callframe: *JSC.CallFrame) bun.JSError!JSC.JSValue;
+const NodeFSFunctionEnum = std.meta.DeclEnum(node.fs.NodeFS);
 
-const NodeFSFunctionEnum = std.meta.DeclEnum(JSC.Node.NodeFS);
-
-/// Returns bindings to call JSC.Node.NodeFS.<function>.
+/// Returns bindings to call jsc.Node.fs.NodeFS.<function>.
 /// Async calls use a thread pool.
 fn Bindings(comptime function_name: NodeFSFunctionEnum) type {
-    const function = @field(JSC.Node.NodeFS, @tagName(function_name));
+    const function = @field(jsc.Node.fs.NodeFS, @tagName(function_name));
     const fn_info = @typeInfo(@TypeOf(function)).@"fn";
     if (fn_info.params.len != 3) {
         @compileError("Expected fn(NodeFS, Arguments) Return for NodeFS." ++ @tagName(function_name));
@@ -25,7 +13,7 @@ fn Bindings(comptime function_name: NodeFSFunctionEnum) type {
     const Arguments = fn_info.params[1].type.?;
 
     return struct {
-        pub fn runSync(this: *JSC.Node.NodeJSFS, globalObject: *JSC.JSGlobalObject, callframe: *JSC.CallFrame) bun.JSError!JSC.JSValue {
+        pub fn runSync(this: *Binding, globalObject: *jsc.JSGlobalObject, callframe: *jsc.CallFrame) bun.JSError!jsc.JSValue {
             var slice = ArgumentsSlice.init(globalObject.bunVM(), callframe.arguments());
             defer slice.deinit();
 
@@ -41,12 +29,12 @@ fn Bindings(comptime function_name: NodeFSFunctionEnum) type {
 
             var result = function(&this.node_fs, args, .sync);
             return switch (result) {
-                .err => |err| globalObject.throwValue(JSC.JSValue.c(err.toJS(globalObject))),
-                .result => |*res| globalObject.toJS(res, .temporary),
+                .err => |err| globalObject.throwValue(err.toJS(globalObject)),
+                .result => |*res| globalObject.toJS(res),
             };
         }
 
-        pub fn runAsync(this: *JSC.Node.NodeJSFS, globalObject: *JSC.JSGlobalObject, callframe: *JSC.CallFrame) bun.JSError!JSC.JSValue {
+        pub fn runAsync(this: *Binding, globalObject: *jsc.JSGlobalObject, callframe: *jsc.CallFrame) bun.JSError!jsc.JSValue {
             var slice = ArgumentsSlice.init(globalObject.bunVM(), callframe.arguments());
             slice.will_be_async = true;
             var deinit = false;
@@ -71,14 +59,14 @@ fn Bindings(comptime function_name: NodeFSFunctionEnum) type {
                 const signal = args.signal orelse break :check_early_abort;
                 if (signal.reasonIfAborted(globalObject)) |reason| {
                     deinit = true;
-                    return JSC.JSPromise.rejectedPromiseValue(globalObject, reason.toJS(globalObject));
+                    return jsc.JSPromise.dangerouslyCreateRejectedPromiseValueWithoutNotifyingVM(globalObject, reason.toJS(globalObject));
                 }
             }
 
-            const Task = @field(JSC.Node.Async, @tagName(function_name));
+            const Task = @field(node.fs.Async, @tagName(function_name));
             switch (comptime function_name) {
                 .cp => return Task.create(globalObject, this, args, globalObject.bunVM(), slice.arena),
-                .readdir => if (args.recursive) return JSC.Node.Async.readdir_recursive.create(globalObject, args, globalObject.bunVM()),
+                .readdir => if (args.recursive) return node.fs.AsyncReaddirRecursiveTask.create(globalObject, args, globalObject.bunVM()),
                 else => {},
             }
             return Task.create(globalObject, this, args, globalObject.bunVM());
@@ -93,28 +81,32 @@ fn callSync(comptime FunctionEnum: NodeFSFunctionEnum) NodeFSFunction {
     return Bindings(FunctionEnum).runSync;
 }
 
-pub const NodeJSFS = struct {
-    node_fs: JSC.Node.NodeFS = .{},
+pub const Binding = struct {
+    node_fs: node.fs.NodeFS = .{},
 
-    pub usingnamespace JSC.Codegen.JSNodeJSFS;
-    pub usingnamespace bun.New(@This());
+    pub const js = jsc.Codegen.JSNodeJSFS;
+    pub const toJS = js.toJS;
+    pub const fromJS = js.fromJS;
+    pub const fromJSDirect = js.fromJSDirect;
 
-    pub fn finalize(this: *JSC.Node.NodeJSFS) void {
+    pub const new = bun.TrivialNew(@This());
+
+    pub fn finalize(this: *Binding) void {
         if (this.node_fs.vm) |vm| {
             if (vm.node_fs == &this.node_fs) {
                 return;
             }
         }
 
-        this.destroy();
+        bun.destroy(this);
     }
 
-    pub fn getDirent(_: *NodeJSFS, globalThis: *JSC.JSGlobalObject) JSC.JSValue {
-        return JSC.Node.Dirent.getConstructor(globalThis);
+    pub fn getDirent(_: *Binding, globalThis: *jsc.JSGlobalObject) jsc.JSValue {
+        return jsc.Node.Dirent.getConstructor(globalThis);
     }
 
-    pub fn getStats(_: *NodeJSFS, globalThis: *JSC.JSGlobalObject) JSC.JSValue {
-        return JSC.Node.StatsSmall.getConstructor(globalThis);
+    pub fn getStats(_: *Binding, globalThis: *jsc.JSGlobalObject) jsc.JSValue {
+        return jsc.Node.StatsSmall.getConstructor(globalThis);
     }
 
     pub const access = callAsync(.access);
@@ -208,8 +200,8 @@ pub const NodeJSFS = struct {
     // pub const statfsSync = callSync(.statfs);
 };
 
-pub fn createBinding(globalObject: *JSC.JSGlobalObject) JSC.JSValue {
-    const module = NodeJSFS.new(.{});
+pub fn createBinding(globalObject: *jsc.JSGlobalObject) jsc.JSValue {
+    const module = Binding.new(.{});
 
     const vm = globalObject.bunVM();
     module.node_fs.vm = vm;
@@ -217,11 +209,11 @@ pub fn createBinding(globalObject: *JSC.JSGlobalObject) JSC.JSValue {
     return module.toJS(globalObject);
 }
 
-pub fn createMemfdForTesting(globalObject: *JSC.JSGlobalObject, callFrame: *JSC.CallFrame) bun.JSError!JSC.JSValue {
+pub fn createMemfdForTesting(globalObject: *jsc.JSGlobalObject, callFrame: *jsc.CallFrame) bun.JSError!jsc.JSValue {
     const arguments = callFrame.arguments_old(1);
 
     if (arguments.len < 1) {
-        return .undefined;
+        return .js_undefined;
     }
 
     if (comptime !bun.Environment.isLinux) {
@@ -229,13 +221,20 @@ pub fn createMemfdForTesting(globalObject: *JSC.JSGlobalObject, callFrame: *JSC.
     }
 
     const size = arguments.ptr[0].toInt64();
-    switch (bun.sys.memfd_create("my_memfd", std.os.linux.MFD.CLOEXEC)) {
+    switch (bun.sys.memfd_create("my_memfd", .non_executable)) {
         .result => |fd| {
             _ = bun.sys.ftruncate(fd, size);
-            return JSC.JSValue.jsNumber(fd.cast());
+            return jsc.JSValue.jsNumber(fd.cast());
         },
         .err => |err| {
-            return globalObject.throwValue(err.toJSC(globalObject));
+            return globalObject.throwValue(err.toJS(globalObject));
         },
     }
 }
+
+const std = @import("std");
+
+const bun = @import("bun");
+const jsc = bun.jsc;
+const node = bun.api.node;
+const ArgumentsSlice = jsc.CallFrame.ArgumentsSlice;

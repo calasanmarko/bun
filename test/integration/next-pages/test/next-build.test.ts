@@ -93,7 +93,10 @@ function normalizeOutput(stdout: string) {
       // displayed file sizes are in post-gzip compression, however
       // the gzip / node:zlib implementation is different in bun and node
       .replace(/\d+(\.\d+)? [km]?b/gi, data => " ".repeat(data.length))
-
+      // normalize "Compiled successfully in Xms" timestamps
+      .replace(/Compiled successfully in (\d|\.)+(ms|s)/gi, "Compiled successfully in 1000ms")
+      // normalize counter logging that may appear in different spots
+      .replaceAll("\ncounter a", "")
       .split("\n")
       .map(x => x.trim())
       .join("\n")
@@ -181,7 +184,6 @@ test(
       "required-server-files.json",
       // these have "signing keys", not sure what they are tbh
       "prerender-manifest.json",
-      "prerender-manifest.js",
       // these are similar but i feel like there might be something we can fix to make them the same
       "next-minimal-server.js.nft.json",
       "next-server.js.nft.json",

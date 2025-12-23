@@ -1,42 +1,3 @@
-const std = @import("std");
-const bun = @import("root").bun;
-const Global = bun.Global;
-const Output = bun.Output;
-const Command = bun.CLI.Command;
-const Install = bun.install;
-const Bin = Install.Bin;
-const PackageManager = Install.PackageManager;
-const Lockfile = Install.Lockfile;
-const PackageID = Install.PackageID;
-const DependencyID = Install.DependencyID;
-const Behavior = Install.Dependency.Behavior;
-const string = bun.string;
-const stringZ = bun.stringZ;
-const libarchive = @import("../libarchive/libarchive.zig").lib;
-const Archive = libarchive.Archive;
-const Expr = bun.js_parser.Expr;
-const Semver = bun.Semver;
-const File = bun.sys.File;
-const FD = bun.FD;
-const strings = bun.strings;
-const glob = bun.glob;
-const PathBuffer = bun.PathBuffer;
-const DirIterator = bun.DirIterator;
-const Environment = bun.Environment;
-const RunCommand = bun.RunCommand;
-const FileSystem = bun.fs.FileSystem;
-const OOM = bun.OOM;
-const js_printer = bun.js_printer;
-const E = bun.js_parser.E;
-const Progress = bun.Progress;
-const JSON = bun.JSON;
-const BoringSSL = bun.BoringSSL;
-const sha = bun.sha;
-const LogLevel = PackageManager.Options.LogLevel;
-const FileDescriptor = bun.FileDescriptor;
-const Publish = bun.CLI.PublishCommand;
-const Dependency = Install.Dependency;
-
 pub const PackCommand = struct {
     pub const Context = struct {
         manager: *PackageManager,
@@ -68,19 +29,19 @@ pub const PackCommand = struct {
             maybe_integrity: ?[sha.SHA512.digest]u8,
             log_level: LogLevel,
         ) void {
-            if (log_level != .silent) {
+            if (log_level != .silent and log_level != .quiet) {
                 Output.prettyln("\n<r><b><blue>Total files<r>: {d}", .{stats.total_files});
                 if (maybe_shasum) |shasum| {
                     Output.prettyln("<b><blue>Shasum<r>: {s}", .{std.fmt.bytesToHex(shasum, .lower)});
                 }
                 if (maybe_integrity) |integrity| {
-                    Output.prettyln("<b><blue>Integrity<r>: {}", .{bun.fmt.integrity(integrity, .short)});
+                    Output.prettyln("<b><blue>Integrity<r>: {f}", .{bun.fmt.integrity(integrity, .short)});
                 }
-                Output.prettyln("<b><blue>Unpacked size<r>: {}", .{
+                Output.prettyln("<b><blue>Unpacked size<r>: {f}", .{
                     bun.fmt.size(stats.unpacked_size, .{ .space_between_number_and_unit = false }),
                 });
                 if (stats.packed_size > 0) {
-                    Output.pretty("<b><blue>Packed size<r>: {}\n", .{
+                    Output.pretty("<b><blue>Packed size<r>: {f}\n", .{
                         bun.fmt.size(stats.packed_size, .{ .space_between_number_and_unit = false }),
                     });
                 }
@@ -98,8 +59,10 @@ pub const PackCommand = struct {
     };
 
     pub fn execWithManager(ctx: Command.Context, manager: *PackageManager) !void {
-        Output.prettyln("<r><b>bun pack <r><d>v" ++ Global.package_json_version_with_sha ++ "<r>", .{});
-        Output.flush();
+        if (manager.options.log_level != .silent and manager.options.log_level != .quiet) {
+            Output.prettyln("<r><b>bun pack <r><d>v" ++ Global.package_json_version_with_sha ++ "<r>", .{});
+            Output.flush();
+        }
 
         var lockfile: Lockfile = undefined;
         const load_from_disk_result = lockfile.loadFromCwd(
@@ -144,37 +107,33 @@ pub const PackCommand = struct {
             },
         };
 
-        switch (manager.options.log_level) {
-            inline else => |log_level| {
-                // var arena = std.heap.ArenaAllocator.init(ctx.allocator);
-                // defer arena.deinit();
+        // var arena = std.heap.ArenaAllocator.init(ctx.allocator);
+        // defer arena.deinit();
 
-                // if (manager.options.filter_patterns.len > 0) {
-                //     // TODO: --filter
-                //     // loop, convert, find matching workspaces, then pack each
-                //     return;
-                // }
+        // if (manager.options.filter_patterns.len > 0) {
+        //     // TODO: --filter
+        //     // loop, convert, find matching workspaces, then pack each
+        //     return;
+        // }
 
-                // just pack the current workspace
-                pack(&pack_ctx, manager.original_package_json_path, log_level, false) catch |err| {
-                    switch (err) {
-                        error.OutOfMemory => bun.outOfMemory(),
-                        error.MissingPackageName, error.MissingPackageVersion => {
-                            Output.errGeneric("package.json must have `name` and `version` fields", .{});
-                            Global.crash();
-                        },
-                        error.InvalidPackageName, error.InvalidPackageVersion => {
-                            Output.errGeneric("package.json `name` and `version` fields must be non-empty strings", .{});
-                            Global.crash();
-                        },
-                        error.MissingPackageJSON => {
-                            Output.errGeneric("failed to find a package.json in: \"{s}\"", .{manager.original_package_json_path});
-                            Global.crash();
-                        },
-                    }
-                };
-            },
-        }
+        // just pack the current workspace
+        pack(&pack_ctx, manager.original_package_json_path, false) catch |err| {
+            switch (err) {
+                error.OutOfMemory => bun.outOfMemory(),
+                error.MissingPackageName, error.MissingPackageVersion => {
+                    Output.errGeneric("package.json must have `name` and `version` fields", .{});
+                    Global.crash();
+                },
+                error.InvalidPackageName, error.InvalidPackageVersion => {
+                    Output.errGeneric("package.json `name` and `version` fields must be non-empty strings", .{});
+                    Global.crash();
+                },
+                error.MissingPackageJSON => {
+                    Output.errGeneric("failed to find a package.json in: \"{s}\"", .{manager.original_package_json_path});
+                    Global.crash();
+                },
+            }
+        };
     }
 
     pub fn exec(ctx: Command.Context) !void {
@@ -211,9 +170,9 @@ pub const PackCommand = struct {
             MissingPackageJSON,
         } ||
             if (for_publish) error{
-            RestrictedUnscopedPackage,
-            PrivatePackage,
-        } else error{};
+                RestrictedUnscopedPackage,
+                PrivatePackage,
+            } else error{};
     }
 
     const package_prefix = "package/";
@@ -255,12 +214,17 @@ pub const PackCommand = struct {
     const PackList = std.ArrayListUnmanaged(PackListEntry);
 
     const PackQueueContext = struct {
-        pub fn lessThan(_: void, a: string, b: string) std.math.Order {
-            return strings.order(a, b);
+        pub fn lessThan(_: void, a: PackQueueItem, b: PackQueueItem) std.math.Order {
+            return strings.order(a.path, b.path);
         }
     };
 
-    const PackQueue = std.PriorityQueue(stringZ, void, PackQueueContext.lessThan);
+    const PackQueueItem = struct {
+        path: [:0]const u8,
+        optional: bool = false,
+    };
+
+    const PackQueue = std.PriorityQueue(PackQueueItem, void, PackQueueContext.lessThan);
 
     const DirInfo = struct {
         std.fs.Dir, // the dir
@@ -270,11 +234,18 @@ pub const PackCommand = struct {
 
     fn iterateIncludedProjectTree(
         allocator: std.mem.Allocator,
+        pack_queue: *PackQueue,
+        bins: []const BinInfo,
         includes: []const Pattern,
+        excludes: []const Pattern,
         root_dir: std.fs.Dir,
-        comptime log_level: LogLevel,
-    ) OOM!PackQueue {
-        var pack_queue = PackQueue.init(allocator, {});
+        log_level: LogLevel,
+    ) OOM!void {
+        if (comptime Environment.isDebug) {
+            for (excludes) |exclude| {
+                bun.assertf(exclude.flags.negated, "Illegal exclusion pattern '{f}'. Exclusion patterns are always negated.", .{exclude.glob});
+            }
+        }
 
         var ignores: std.ArrayListUnmanaged(IgnorePatterns) = .{};
         defer ignores.deinit(allocator);
@@ -291,7 +262,7 @@ pub const PackCommand = struct {
         defer subpath_dedupe.deinit();
 
         // first find included dirs and files
-        while (dirs.popOrNull()) |dir_info| {
+        while (dirs.pop()) |dir_info| {
             var dir, const dir_subpath, const dir_depth = dir_info;
             defer {
                 if (dir_depth != 1) {
@@ -299,53 +270,67 @@ pub const PackCommand = struct {
                 }
             }
 
-            var dir_iter = DirIterator.iterate(dir, .u8);
-            while (dir_iter.next().unwrap() catch null) |entry| {
+            var dir_iter = DirIterator.iterate(.fromStdDir(dir), .u8);
+            next_entry: while (dir_iter.next().unwrap() catch null) |entry| {
                 if (entry.kind != .file and entry.kind != .directory) continue;
 
                 const entry_name = entry.name.slice();
                 const entry_subpath = try entrySubpath(allocator, dir_subpath, entry_name);
 
                 var included = false;
+                var is_unconditionally_included = false;
 
                 if (dir_depth == 1) {
                     if (strings.eqlComptime(entry_name, "package.json")) continue;
                     if (strings.eqlComptime(entry_name, "node_modules")) continue;
 
-                    // TODO: should this be case insensitive on all platforms?
-                    const eql = if (comptime Environment.isLinux)
-                        strings.eqlComptime
-                    else
-                        strings.eqlCaseInsensitiveASCIIICheckLength;
-
-                    if (entry.kind == .file and
-                        (eql(entry_name, "package.json") or
-                        eql(entry_name, "LICENSE") or
-                        eql(entry_name, "LICENCE") or
-                        eql(entry_name, "README") or
-                        entry_name.len > "README.".len and eql(entry_name[0.."README.".len], "README.")))
+                    if (entry.kind == .file and isUnconditionallyIncludedFile(entry_name)) {
                         included = true;
+                        is_unconditionally_included = true;
+                    }
                 }
 
                 if (!included) {
                     for (includes) |include| {
-                        if (include.dirs_only and entry.kind != .directory) continue;
+                        if (include.flags.dirs_only and entry.kind != .directory) continue;
 
                         // include patters are not recursive unless they start with `**/`
                         // normally the behavior of `index.js` and `**/index.js` are the same,
                         // but includes require `**/`
-                        const match_path = if (include.@"leading **/") entry_name else entry_subpath;
-                        switch (glob.walk.matchImpl(allocator, include.glob, match_path)) {
+                        const match_path = if (include.flags.@"leading **/") entry_name else entry_subpath;
+                        switch (glob.match(include.glob.slice(), match_path)) {
                             .match => included = true,
-                            .negate_no_match => included = false,
-
+                            .negate_no_match, .negate_match => unreachable,
                             else => {},
                         }
                     }
                 }
 
+                // There may be a "narrowing" exclusion that excludes a subset
+                // of files within an included directory/pattern.
+                if (included and !is_unconditionally_included and excludes.len > 0) {
+                    for (excludes) |exclude| {
+                        if (exclude.flags.dirs_only and entry.kind != .directory) continue;
+
+                        const match_path = if (exclude.flags.@"leading **/") entry_name else entry_subpath;
+                        // NOTE: These patterns have `!` so `.match` logic is
+                        // inverted here
+                        switch (glob.match(exclude.glob.slice(), match_path)) {
+                            .negate_no_match => included = false,
+                            else => {},
+                        }
+                    }
+                }
+
+                // TODO: do not traverse directories that match patterns
+                // excluding all files within them (e.g. `!test/**`)
                 if (!included) {
                     if (entry.kind == .directory) {
+                        for (bins) |bin| {
+                            if (bin.type == .dir and strings.eqlLong(bin.path, entry_subpath, true)) {
+                                continue :next_entry;
+                            }
+                        }
                         const subdir = openSubdir(dir, entry_name, entry_subpath);
                         try dirs.append(allocator, .{ subdir, entry_subpath, dir_depth + 1 });
                     }
@@ -355,6 +340,11 @@ pub const PackCommand = struct {
 
                 switch (entry.kind) {
                     .directory => {
+                        for (bins) |bin| {
+                            if (bin.type == .dir and strings.eqlLong(bin.path, entry_subpath, true)) {
+                                continue :next_entry;
+                            }
+                        }
                         const subdir = openSubdir(dir, entry_name, entry_subpath);
                         try included_dirs.append(allocator, .{ subdir, entry_subpath, dir_depth + 1 });
                     },
@@ -363,7 +353,13 @@ pub const PackCommand = struct {
                         bun.assertWithLocation(!dedupe_entry.found_existing, @src());
                         if (dedupe_entry.found_existing) continue;
 
-                        try pack_queue.add(entry_subpath);
+                        for (bins) |bin| {
+                            if (bin.type == .file and strings.eqlLong(bin.path, entry_subpath, true)) {
+                                continue :next_entry;
+                            }
+                        }
+
+                        try pack_queue.add(.{ .path = entry_subpath });
                     },
                     else => unreachable,
                 }
@@ -372,19 +368,27 @@ pub const PackCommand = struct {
 
         // for each included dir, traverse it's entries, exclude any with `negate_no_match`.
         for (included_dirs.items) |included_dir_info| {
-            try addEntireTree(allocator, included_dir_info, &pack_queue, &subpath_dedupe, log_level);
+            try addEntireTree(
+                allocator,
+                bins,
+                excludes,
+                included_dir_info,
+                pack_queue,
+                &subpath_dedupe,
+                log_level,
+            );
         }
-
-        return pack_queue;
     }
 
     /// Adds all files in a directory tree to `pack_list` (default ignores still apply)
     fn addEntireTree(
         allocator: std.mem.Allocator,
+        bins: []const BinInfo,
+        excludes: []const Pattern,
         root_dir_info: DirInfo,
         pack_queue: *PackQueue,
-        maybe_dedupe: ?*bun.StringHashMap(void),
-        comptime log_level: LogLevel,
+        dedupe: *bun.StringHashMap(void),
+        log_level: LogLevel,
     ) OOM!void {
         var dirs: std.ArrayListUnmanaged(DirInfo) = .{};
         defer dirs.deinit(allocator);
@@ -394,7 +398,25 @@ pub const PackCommand = struct {
         var ignores: std.ArrayListUnmanaged(IgnorePatterns) = .{};
         defer ignores.deinit(allocator);
 
-        while (dirs.popOrNull()) |dir_info| {
+        var negated_excludes: std.ArrayListUnmanaged(Pattern) = .{};
+        defer negated_excludes.deinit(allocator);
+
+        if (excludes.len > 0) {
+            try negated_excludes.ensureTotalCapacityPrecise(allocator, excludes.len);
+            for (excludes) |exclude| {
+                try negated_excludes.append(allocator, exclude.asPositive());
+            }
+            try ignores.append(allocator, IgnorePatterns{
+                .list = negated_excludes.items,
+                .kind = .@"package.json",
+                .depth = 1,
+                // always assume no relative path b/c matching is done from the
+                // root directory
+                .has_rel_path = false,
+            });
+        }
+
+        while (dirs.pop()) |dir_info| {
             var dir, const dir_subpath, const dir_depth = dir_info;
             defer dir.close();
 
@@ -418,8 +440,8 @@ pub const PackCommand = struct {
                 }
             }
 
-            var iter = DirIterator.iterate(dir, .u8);
-            while (iter.next().unwrap() catch null) |entry| {
+            var iter = DirIterator.iterate(.fromStdDir(dir), .u8);
+            next_entry: while (iter.next().unwrap() catch null) |entry| {
                 if (entry.kind != .file and entry.kind != .directory) continue;
 
                 const entry_name = entry.name.slice();
@@ -430,7 +452,7 @@ pub const PackCommand = struct {
                 }
 
                 if (isExcluded(entry, entry_subpath, dir_depth, ignores.items)) |used_pattern_info| {
-                    if (comptime log_level.isVerbose()) {
+                    if (log_level.isVerbose()) {
                         const pattern, const kind = used_pattern_info;
                         Output.prettyln("<r><blue>ignore<r> <d>[{s}:{s}]<r> {s}{s}", .{
                             @tagName(kind),
@@ -445,13 +467,22 @@ pub const PackCommand = struct {
 
                 switch (entry.kind) {
                     .file => {
-                        if (maybe_dedupe) |dedupe| {
-                            const dedupe_entry = try dedupe.getOrPut(entry_subpath);
-                            if (dedupe_entry.found_existing) continue;
+                        const dedupe_entry = try dedupe.getOrPut(entry_subpath);
+                        if (dedupe_entry.found_existing) continue;
+                        for (bins) |bin| {
+                            if (bin.type == .file and strings.eqlLong(bin.path, entry_subpath, true)) {
+                                continue :next_entry;
+                            }
                         }
-                        try pack_queue.add(entry_subpath);
+                        try pack_queue.add(.{ .path = entry_subpath });
                     },
                     .directory => {
+                        for (bins) |bin| {
+                            if (bin.type == .dir and strings.eqlLong(bin.path, entry_subpath, true)) {
+                                continue :next_entry;
+                            }
+                        }
+
                         const subdir = openSubdir(dir, entry_name, entry_subpath);
 
                         try dirs.append(allocator, .{
@@ -485,11 +516,11 @@ pub const PackCommand = struct {
         dir_subpath: string,
         entry_name: string,
     ) OOM!stringZ {
-        return std.fmt.allocPrintZ(allocator, "{s}{s}{s}", .{
+        return std.fmt.allocPrintSentinel(allocator, "{s}{s}{s}", .{
             dir_subpath,
             if (dir_subpath.len == 0) "" else "/",
             entry_name,
-        });
+        }, 0);
     }
 
     fn entryNameZ(
@@ -503,7 +534,7 @@ pub const PackCommand = struct {
     fn iterateBundledDeps(
         ctx: *Context,
         root_dir: std.fs.Dir,
-        comptime log_level: LogLevel,
+        log_level: LogLevel,
     ) OOM!PackQueue {
         var bundled_pack_queue = PackQueue.init(ctx.allocator, {});
         if (ctx.bundled_deps.items.len == 0) return bundled_pack_queue;
@@ -532,7 +563,7 @@ pub const PackCommand = struct {
         var additional_bundled_deps: std.ArrayListUnmanaged(DirInfo) = .{};
         defer additional_bundled_deps.deinit(ctx.allocator);
 
-        var iter = DirIterator.iterate(dir, .u8);
+        var iter = DirIterator.iterate(.fromStdDir(dir), .u8);
         while (iter.next().unwrap() catch null) |entry| {
             if (entry.kind != .directory) continue;
 
@@ -546,7 +577,7 @@ pub const PackCommand = struct {
                 };
                 defer scoped_dir.close();
 
-                var scoped_iter = DirIterator.iterate(scoped_dir, .u8);
+                var scoped_iter = DirIterator.iterate(.fromStdDir(scoped_dir), .u8);
                 while (scoped_iter.next().unwrap() catch null) |sub_entry| {
                     const entry_name = try entrySubpath(ctx.allocator, _entry_name, sub_entry.name.slice());
 
@@ -610,7 +641,7 @@ pub const PackCommand = struct {
             }
         }
 
-        while (additional_bundled_deps.popOrNull()) |bundled_dir_info| {
+        while (additional_bundled_deps.pop()) |bundled_dir_info| {
             const dir_subpath = bundled_dir_info[1];
             const maybe_slash = strings.lastIndexOfChar(dir_subpath, '/');
             bun.assertWithLocation(maybe_slash != null, @src());
@@ -643,7 +674,7 @@ pub const PackCommand = struct {
         bundled_pack_queue: *PackQueue,
         dedupe: *bun.StringHashMap(void),
         additional_bundled_deps: *std.ArrayListUnmanaged(DirInfo),
-        comptime log_level: LogLevel,
+        log_level: LogLevel,
     ) OOM!void {
         ctx.stats.bundled_deps += 1;
 
@@ -652,11 +683,11 @@ pub const PackCommand = struct {
 
         try dirs.append(ctx.allocator, bundled_dir_info);
 
-        while (dirs.popOrNull()) |dir_info| {
+        while (dirs.pop()) |dir_info| {
             var dir, const dir_subpath, const dir_depth = dir_info;
             defer dir.close();
 
-            var iter = DirIterator.iterate(dir, .u8);
+            var iter = DirIterator.iterate(.fromStdDir(dir), .u8);
             while (iter.next().unwrap() catch null) |entry| {
                 if (entry.kind != .file and entry.kind != .directory) continue;
 
@@ -667,12 +698,12 @@ pub const PackCommand = struct {
                     if (strings.eqlComptime(entry_name, "package.json")) {
                         if (entry.kind != .file) break :root_depth;
                         // find more dependencies to bundle
-                        const source = File.toSourceAt(dir, entryNameZ(entry_name, entry_subpath), ctx.allocator).unwrap() catch |err| {
+                        const source = &(File.toSourceAt(dir, entryNameZ(entry_name, entry_subpath), ctx.allocator, .{}).unwrap() catch |err| {
                             Output.err(err, "failed to read package.json: \"{s}\"", .{entry_subpath});
                             Global.crash();
-                        };
+                        });
 
-                        const json = JSON.parsePackageJSONUTF8(&source, ctx.manager.log, ctx.allocator) catch
+                        const json = JSON.parsePackageJSONUTF8(source, ctx.manager.log, ctx.allocator) catch
                             break :root_depth;
 
                         // for each dependency in `dependencies` find the closest node_modules folder
@@ -690,10 +721,10 @@ pub const PackCommand = struct {
 
                                 const dep_name = dep.key.?.asString(ctx.allocator) orelse continue;
 
-                                const dep_subpath = try std.fmt.allocPrintZ(ctx.allocator, "{s}/node_modules/{s}", .{
+                                const dep_subpath = try std.fmt.allocPrintSentinel(ctx.allocator, "{s}/node_modules/{s}", .{
                                     dir_subpath,
                                     dep_name,
-                                });
+                                }, 0);
 
                                 // starting at `node_modules/is-even/node_modules/is-odd`
                                 var dep_dir_depth: usize = bundled_dir_info[2] + 2;
@@ -737,7 +768,7 @@ pub const PackCommand = struct {
                 }
 
                 if (isExcluded(entry, entry_subpath, dir_depth, &.{})) |used_pattern_info| {
-                    if (comptime log_level.isVerbose()) {
+                    if (log_level.isVerbose()) {
                         const pattern, const kind = used_pattern_info;
                         Output.prettyln("<r><blue>ignore<r> <d>[{s}:{s}]<r> {s}{s}", .{
                             @tagName(kind),
@@ -752,7 +783,7 @@ pub const PackCommand = struct {
 
                 switch (entry.kind) {
                     .file => {
-                        try bundled_pack_queue.add(entry_subpath);
+                        try bundled_pack_queue.add(.{ .path = entry_subpath });
                     },
                     .directory => {
                         const subdir = openSubdir(dir, entry_name, entry_subpath);
@@ -772,11 +803,11 @@ pub const PackCommand = struct {
     /// Returns a list of files to pack and another list of files from bundled dependencies
     fn iterateProjectTree(
         allocator: std.mem.Allocator,
-        root_dir: std.fs.Dir,
-        comptime log_level: LogLevel,
-    ) OOM!PackQueue {
-        var pack_queue = PackQueue.init(allocator, {});
-
+        pack_queue: *PackQueue,
+        bins: []const BinInfo,
+        root_dir: DirInfo,
+        log_level: LogLevel,
+    ) OOM!void {
         var ignores: std.ArrayListUnmanaged(IgnorePatterns) = .{};
         defer ignores.deinit(allocator);
 
@@ -785,9 +816,9 @@ pub const PackCommand = struct {
         var dirs: std.ArrayListUnmanaged(DirInfo) = .{};
         defer dirs.deinit(allocator);
 
-        try dirs.append(allocator, .{ root_dir, "", 1 });
+        try dirs.append(allocator, root_dir);
 
-        while (dirs.popOrNull()) |dir_info| {
+        while (dirs.pop()) |dir_info| {
             var dir, const dir_subpath, const dir_depth = dir_info;
             defer {
                 if (dir_depth != 1) {
@@ -816,8 +847,8 @@ pub const PackCommand = struct {
                 }
             }
 
-            var dir_iter = DirIterator.iterate(dir, .u8);
-            while (dir_iter.next().unwrap() catch null) |entry| {
+            var dir_iter = DirIterator.iterate(.fromStdDir(dir), .u8);
+            next_entry: while (dir_iter.next().unwrap() catch null) |entry| {
                 if (entry.kind != .file and entry.kind != .directory) continue;
 
                 const entry_name = entry.name.slice();
@@ -835,7 +866,7 @@ pub const PackCommand = struct {
                 }
 
                 if (isExcluded(entry, entry_subpath, dir_depth, ignores.items)) |used_pattern_info| {
-                    if (comptime log_level.isVerbose()) {
+                    if (log_level.isVerbose()) {
                         const pattern, const kind = used_pattern_info;
                         Output.prettyln("<r><blue>ignore<r> <d>[{s}:{s}]<r> {s}{s}", .{
                             @tagName(kind),
@@ -851,9 +882,20 @@ pub const PackCommand = struct {
                 switch (entry.kind) {
                     .file => {
                         bun.assertWithLocation(entry_subpath.len > 0, @src());
-                        try pack_queue.add(entry_subpath);
+                        for (bins) |bin| {
+                            if (bin.type == .file and strings.eqlLong(bin.path, entry_subpath, true)) {
+                                continue :next_entry;
+                            }
+                        }
+                        try pack_queue.add(.{ .path = entry_subpath });
                     },
                     .directory => {
+                        for (bins) |bin| {
+                            if (bin.type == .dir and strings.eqlLong(bin.path, entry_subpath, true)) {
+                                continue :next_entry;
+                            }
+                        }
+
                         const subdir = openSubdir(dir, entry_name, entry_subpath);
 
                         try dirs.append(allocator, .{
@@ -866,8 +908,6 @@ pub const PackCommand = struct {
                 }
             }
         }
-
-        return pack_queue;
     }
 
     fn getBundledDeps(
@@ -924,7 +964,7 @@ pub const PackCommand = struct {
     }
 
     const BinInfo = struct {
-        path: string,
+        path: [:0]const u8,
         type: Type,
 
         const Type = enum {
@@ -945,7 +985,7 @@ pub const PackCommand = struct {
             if (bin.expr.asString(allocator)) |bin_str| {
                 const normalized = bun.path.normalizeBuf(bin_str, &path_buf, .posix);
                 try bins.append(allocator, .{
-                    .path = try allocator.dupe(u8, normalized),
+                    .path = try allocator.dupeZ(u8, normalized),
                     .type = .file,
                 });
                 return bins.items;
@@ -960,7 +1000,7 @@ pub const PackCommand = struct {
                             if (bin_prop_value.asString(allocator)) |bin_str| {
                                 const normalized = bun.path.normalizeBuf(bin_str, &path_buf, .posix);
                                 try bins.append(allocator, .{
-                                    .path = try allocator.dupe(u8, normalized),
+                                    .path = try allocator.dupeZ(u8, normalized),
                                     .type = .file,
                                 });
                             }
@@ -980,7 +1020,7 @@ pub const PackCommand = struct {
                         if (bin.expr.asString(allocator)) |bin_str| {
                             const normalized = bun.path.normalizeBuf(bin_str, &path_buf, .posix);
                             try bins.append(allocator, .{
-                                .path = try allocator.dupe(u8, normalized),
+                                .path = try allocator.dupeZ(u8, normalized),
                                 .type = .dir,
                             });
                         }
@@ -1025,27 +1065,15 @@ pub const PackCommand = struct {
         const entry_name = entry.name.slice();
 
         if (dir_depth == 1) {
-
-            // TODO: should this be case insensitive on all platforms?
-            const eql = if (comptime Environment.isLinux)
-                strings.eqlComptime
-            else
-                strings.eqlCaseInsensitiveASCIIICheckLength;
-
-            // first, check files that can never be ignored. project root directory only
-            if (entry.kind == .file and
-                (eql(entry_name, "package.json") or
-                eql(entry_name, "LICENSE") or
-                eql(entry_name, "LICENCE") or
-                eql(entry_name, "README") or
-                entry_name.len > "README.".len and eql(entry_name[0.."README.".len], "README.") or
-                eql(entry_name, "CHANGELOG") or
-                entry_name.len > "CHANGELOG.".len and eql(entry_name[0.."CHANGELOG.".len], "CHANGELOG.")))
+            // first, check files that can never be ignored. project root
+            // directory only
+            if (isUnconditionallyIncludedFile(entry_name) or isSpecialFileOrVariant(entry_name, "CHANGELOG")) {
                 return null;
+            }
 
             // check default ignores that only apply to the root project directory
             for (root_default_ignore_patterns) |pattern| {
-                switch (glob.walk.matchImpl(bun.default_allocator, pattern, entry_name)) {
+                switch (glob.match(pattern, entry_name)) {
                     .match => {
                         // cannot be reversed
                         return .{
@@ -1072,7 +1100,7 @@ pub const PackCommand = struct {
 
         for (default_ignore_patterns) |pattern_info| {
             const pattern, const can_override = pattern_info;
-            switch (glob.walk.matchImpl(bun.default_allocator, pattern, entry_name)) {
+            switch (glob.match(pattern, entry_name)) {
                 .match => {
                     if (can_override) {
                         ignored = true;
@@ -1111,13 +1139,13 @@ pub const PackCommand = struct {
                 }
             }
             for (ignore.list) |pattern| {
-                if (pattern.dirs_only and entry.kind != .directory) continue;
+                if (pattern.flags.dirs_only and entry.kind != .directory) continue;
 
-                const match_path = if (pattern.rel_path) rel else entry_name;
-                switch (glob.walk.matchImpl(bun.default_allocator, pattern.glob, match_path)) {
+                const match_path = if (pattern.flags.rel_path) rel else entry_name;
+                switch (glob.match(pattern.glob.slice(), match_path)) {
                     .match => {
                         ignored = true;
-                        ignore_pattern = pattern.glob;
+                        ignore_pattern = pattern.glob.slice();
                         ignore_kind = ignore.kind;
                     },
                     .negate_no_match => ignored = false,
@@ -1135,15 +1163,15 @@ pub const PackCommand = struct {
             };
     }
 
-    const BufferedFileReader = std.io.BufferedReader(1024 * 512, File.Reader);
+    const BufferedFileReader = bun.deprecated.BufferedReader(1024 * 512, File.Reader);
 
     pub fn pack(
         ctx: *Context,
         abs_package_json_path: stringZ,
-        comptime log_level: LogLevel,
         comptime for_publish: bool,
     ) PackError(for_publish)!if (for_publish) Publish.Context(true) else void {
         const manager = ctx.manager;
+        const log_level = manager.options.log_level;
         const json = switch (manager.workspace_package_json_cache.getWithPath(manager.allocator, manager.log, abs_package_json_path, .{
             .guess_indentation = true,
         })) {
@@ -1349,12 +1377,38 @@ pub const PackCommand = struct {
             try getBundledDeps(ctx.allocator, json.root, "bundleDependencies") orelse
             .{};
 
-        var pack_queue = pack_queue: {
+        var pack_queue: PackQueue = .init(ctx.allocator, {});
+        defer pack_queue.deinit();
+
+        const bins = try getPackageBins(ctx.allocator, json.root);
+        defer for (bins) |bin| ctx.allocator.free(bin.path);
+
+        for (bins) |bin| {
+            switch (bin.type) {
+                .file => {
+                    try pack_queue.add(.{ .path = bin.path, .optional = true });
+                },
+                .dir => {
+                    const bin_dir = root_dir.openDir(bin.path, .{ .iterate = true }) catch {
+                        // non-existent bins are ignored
+                        continue;
+                    };
+
+                    try iterateProjectTree(ctx.allocator, &pack_queue, &.{}, .{ bin_dir, bin.path, 2 }, log_level);
+                },
+            }
+        }
+
+        iterate_project_tree: {
             if (json.root.get("files")) |files| {
                 files_error: {
                     if (files.asArray()) |_files_array| {
                         var includes: std.ArrayListUnmanaged(Pattern) = .{};
-                        defer includes.deinit(ctx.allocator);
+                        var excludes: std.ArrayListUnmanaged(Pattern) = .{};
+                        defer {
+                            includes.deinit(ctx.allocator);
+                            excludes.deinit(ctx.allocator);
+                        }
 
                         var path_buf: PathBuffer = undefined;
                         var files_array = _files_array;
@@ -1362,34 +1416,45 @@ pub const PackCommand = struct {
                             if (files_entry.asString(ctx.allocator)) |file_entry_str| {
                                 const normalized = bun.path.normalizeBuf(file_entry_str, &path_buf, .posix);
                                 const parsed = try Pattern.fromUTF8(ctx.allocator, normalized) orelse continue;
-                                try includes.append(ctx.allocator, parsed);
+                                if (parsed.flags.negated) {
+                                    @branchHint(.unlikely); // most "files" entries are not exclusions.
+                                    try excludes.append(ctx.allocator, parsed);
+                                } else {
+                                    try includes.append(ctx.allocator, parsed);
+                                }
+
                                 continue;
                             }
 
                             break :files_error;
                         }
 
-                        break :pack_queue try iterateIncludedProjectTree(
+                        try iterateIncludedProjectTree(
                             ctx.allocator,
+                            &pack_queue,
+                            bins,
                             includes.items,
+                            excludes.items,
                             root_dir,
                             log_level,
                         );
+                        break :iterate_project_tree;
                     }
                 }
 
                 Output.errGeneric("expected `files` to be an array of string values", .{});
                 Global.crash();
+            } else {
+                // pack from project root
+                try iterateProjectTree(
+                    ctx.allocator,
+                    &pack_queue,
+                    bins,
+                    .{ root_dir, "", 1 },
+                    log_level,
+                );
             }
-
-            // pack from project root
-            break :pack_queue try iterateProjectTree(
-                ctx.allocator,
-                root_dir,
-                log_level,
-            );
-        };
-        defer pack_queue.deinit();
+        }
 
         var bundled_pack_queue = try iterateBundledDeps(ctx, root_dir, log_level);
         defer bundled_pack_queue.deinit();
@@ -1403,12 +1468,13 @@ pub const PackCommand = struct {
             printArchivedFilesAndPackages(ctx, root_dir, true, &pack_queue, 0);
 
             if (comptime !for_publish) {
-                if (manager.options.pack_destination.len == 0) {
-                    Output.pretty("\n{}\n", .{fmtTarballFilename(package_name, package_version, .normalize)});
+                if (manager.options.pack_destination.len == 0 and manager.options.pack_filename.len == 0) {
+                    Output.pretty("\n{f}\n", .{fmtTarballFilename(package_name, package_version, .normalize)});
                 } else {
                     var dest_buf: PathBuffer = undefined;
-                    const abs_tarball_dest, _ = absTarballDestination(
+                    const abs_tarball_dest, _ = tarballDestination(
                         ctx.manager.options.pack_destination,
+                        ctx.manager.options.pack_filename,
                         abs_workspace_path,
                         package_name,
                         package_version,
@@ -1444,8 +1510,9 @@ pub const PackCommand = struct {
 
             if (comptime for_publish) {
                 var dest_buf: bun.PathBuffer = undefined;
-                const abs_tarball_dest, _ = absTarballDestination(
+                const abs_tarball_dest, _ = tarballDestination(
                     ctx.manager.options.pack_destination,
+                    ctx.manager.options.pack_filename,
                     abs_workspace_path,
                     package_name,
                     package_version,
@@ -1472,10 +1539,7 @@ pub const PackCommand = struct {
             return;
         }
 
-        const bins = try getPackageBins(ctx.allocator, json.root);
-        defer for (bins) |bin| ctx.allocator.free(bin.path);
-
-        var print_buf = std.ArrayList(u8).init(ctx.allocator);
+        var print_buf = std.array_list.Managed(u8).init(ctx.allocator);
         defer print_buf.deinit();
         const print_buf_writer = print_buf.writer();
 
@@ -1526,8 +1590,9 @@ pub const PackCommand = struct {
         }
 
         var dest_buf: PathBuffer = undefined;
-        const abs_tarball_dest, const abs_tarball_dest_dir_end = absTarballDestination(
+        const abs_tarball_dest, const abs_tarball_dest_dir_end = tarballDestination(
             ctx.manager.options.pack_destination,
+            ctx.manager.options.pack_filename,
             abs_workspace_path,
             package_name,
             package_version,
@@ -1561,50 +1626,56 @@ pub const PackCommand = struct {
         defer ctx.allocator.destroy(file_reader);
         file_reader.* = .{
             .unbuffered_reader = undefined,
+            .buf = undefined,
         };
 
         var entry = Archive.Entry.new2(archive);
 
         {
-            var progress: if (log_level == .silent) void else Progress = if (comptime log_level == .silent) {} else .{};
-            var node = if (comptime log_level == .silent) {} else node: {
-                progress.supports_ansi_escape_codes = Output.enable_ansi_colors;
-                var node: *Progress.Node = progress.start("", pack_queue.count() + bundled_pack_queue.count() + 1);
-                node.unit = " files";
-                break :node node;
-            };
-            defer if (comptime log_level != .silent) node.end();
+            var progress: Progress = undefined;
+            var node: *Progress.Node = undefined;
+            if (log_level.showProgress()) {
+                progress = .{};
+                progress.supports_ansi_escape_codes = Output.enable_ansi_colors_stderr;
+                node = progress.start("", pack_queue.count() + bundled_pack_queue.count() + 1);
+                node.unit = .files;
+            }
+            defer if (log_level.showProgress()) node.end();
 
             entry = try archivePackageJSON(ctx, archive, entry, root_dir, edited_package_json);
-            if (comptime log_level != .silent) node.completeOne();
+            if (log_level.showProgress()) node.completeOne();
 
-            while (pack_queue.removeOrNull()) |pathname| {
-                defer if (comptime log_level != .silent) node.completeOne();
+            while (pack_queue.removeOrNull()) |item| {
+                defer if (log_level.showProgress()) node.completeOne();
 
-                const file = bun.sys.openat(bun.toFD(root_dir.fd), pathname, bun.O.RDONLY, 0).unwrap() catch |err| {
-                    Output.err(err, "failed to open file: \"{s}\"", .{pathname});
+                const file = bun.sys.openat(.fromStdDir(root_dir), item.path, bun.O.RDONLY, 0).unwrap() catch |err| {
+                    if (item.optional) {
+                        ctx.stats.total_files -= 1;
+                        continue;
+                    }
+                    Output.err(err, "failed to open file: \"{s}\"", .{item.path});
                     Global.crash();
                 };
 
-                const fd = bun.sys.toLibUVOwnedFD(file, .open, .close_on_fail).unwrap() catch |err| {
-                    Output.err(err, "failed to open file: \"{s}\"", .{pathname});
+                const fd = file.makeLibUVOwnedForSyscall(.open, .close_on_fail).unwrap() catch |err| {
+                    Output.err(err, "failed to open file: \"{s}\"", .{item.path});
                     Global.crash();
                 };
 
-                defer _ = bun.sys.close(fd);
+                defer fd.close();
 
                 const stat = bun.sys.sys_uv.fstat(fd).unwrap() catch |err| {
-                    Output.err(err, "failed to stat file: \"{s}\"", .{pathname});
+                    Output.err(err, "failed to stat file: \"{s}\"", .{item.path});
                     Global.crash();
                 };
 
-                try pack_list.append(ctx.allocator, .{ .subpath = pathname, .size = @intCast(stat.size) });
+                try pack_list.append(ctx.allocator, .{ .subpath = item.path, .size = @intCast(stat.size) });
 
                 entry = try addArchiveEntry(
                     ctx,
                     fd,
                     stat,
-                    pathname,
+                    item.path,
                     &read_buf,
                     file_reader,
                     archive,
@@ -1614,16 +1685,20 @@ pub const PackCommand = struct {
                 );
             }
 
-            while (bundled_pack_queue.removeOrNull()) |pathname| {
-                defer if (comptime log_level != .silent) node.completeOne();
+            while (bundled_pack_queue.removeOrNull()) |item| {
+                defer if (log_level.showProgress()) node.completeOne();
 
-                const file = File.openat(root_dir, pathname, bun.O.RDONLY, 0).unwrap() catch |err| {
-                    Output.err(err, "failed to open file: \"{s}\"", .{pathname});
+                const file = File.openat(.fromStdDir(root_dir), item.path, bun.O.RDONLY, 0).unwrap() catch |err| {
+                    if (item.optional) {
+                        ctx.stats.total_files -= 1;
+                        continue;
+                    }
+                    Output.err(err, "failed to open file: \"{s}\"", .{item.path});
                     Global.crash();
                 };
                 defer file.close();
                 const stat = file.stat().unwrap() catch |err| {
-                    Output.err(err, "failed to stat file: \"{}\"", .{file.handle});
+                    Output.err(err, "failed to stat file: \"{f}\"", .{file.handle});
                     Global.crash();
                 };
 
@@ -1631,7 +1706,7 @@ pub const PackCommand = struct {
                     ctx,
                     file.handle,
                     stat,
-                    pathname,
+                    item.path,
                     &read_buf,
                     file_reader,
                     archive,
@@ -1695,6 +1770,7 @@ pub const PackCommand = struct {
 
             file_reader.* = .{
                 .unbuffered_reader = tarball_file.reader(),
+                .buf = undefined,
             };
 
             var size: usize = 0;
@@ -1725,7 +1801,7 @@ pub const PackCommand = struct {
                 package_name,
                 package_version,
                 &json.root,
-                json.source,
+                &json.source,
                 shasum,
                 integrity,
             );
@@ -1739,8 +1815,8 @@ pub const PackCommand = struct {
         );
 
         if (comptime !for_publish) {
-            if (manager.options.pack_destination.len == 0) {
-                Output.pretty("\n{}\n", .{fmtTarballFilename(package_name, package_version, .normalize)});
+            if (manager.options.pack_destination.len == 0 and manager.options.pack_filename.len == 0) {
+                Output.pretty("\n{f}\n", .{fmtTarballFilename(package_name, package_version, .normalize)});
             } else {
                 Output.pretty("\n{s}\n", .{abs_tarball_dest});
             }
@@ -1795,34 +1871,58 @@ pub const PackCommand = struct {
         }
     }
 
-    fn absTarballDestination(
+    fn tarballDestination(
         pack_destination: string,
+        pack_filename: string,
         abs_workspace_path: string,
         package_name: string,
         package_version: string,
         dest_buf: []u8,
     ) struct { stringZ, usize } {
-        const tarball_destination_dir = bun.path.joinAbsStringBuf(
-            abs_workspace_path,
-            dest_buf,
-            &.{pack_destination},
-            .auto,
-        );
-
-        const tarball_name = std.fmt.bufPrint(dest_buf[strings.withoutTrailingSlash(tarball_destination_dir).len..], "/{}\x00", .{
-            fmtTarballFilename(package_name, package_version, .normalize),
-        }) catch {
-            Output.errGeneric("archive destination name too long: \"{s}/{}\"", .{
-                strings.withoutTrailingSlash(tarball_destination_dir),
-                fmtTarballFilename(package_name, package_version, .normalize),
+        if (pack_filename.len > 0 and pack_destination.len > 0) {
+            Output.errGeneric("cannot use both filename and destination at the same time with tarball: filename \"{s}\" and destination \"{s}\"", .{
+                strings.withoutTrailingSlash(pack_filename),
+                strings.withoutTrailingSlash(pack_destination),
             });
             Global.crash();
-        };
+        }
+        if (pack_filename.len > 0) {
+            const tarball_name = std.fmt.bufPrint(dest_buf[0..], "{s}\x00", .{
+                pack_filename,
+            }) catch {
+                Output.errGeneric("archive filename too long: \"{s}\"", .{
+                    pack_filename,
+                });
+                Global.crash();
+            };
 
-        return .{
-            dest_buf[0 .. strings.withoutTrailingSlash(tarball_destination_dir).len + tarball_name.len - 1 :0],
-            tarball_destination_dir.len,
-        };
+            return .{
+                dest_buf[0 .. tarball_name.len - 1 :0],
+                0,
+            };
+        } else {
+            const tarball_destination_dir = bun.path.joinAbsStringBuf(
+                abs_workspace_path,
+                dest_buf,
+                &.{pack_destination},
+                .auto,
+            );
+
+            const tarball_name = std.fmt.bufPrint(dest_buf[strings.withoutTrailingSlash(tarball_destination_dir).len..], "/{f}\x00", .{
+                fmtTarballFilename(package_name, package_version, .normalize),
+            }) catch {
+                Output.errGeneric("archive destination name too long: \"{s}/{f}\"", .{
+                    strings.withoutTrailingSlash(tarball_destination_dir),
+                    fmtTarballFilename(package_name, package_version, .normalize),
+                });
+                Global.crash();
+            };
+
+            return .{
+                dest_buf[0 .. strings.withoutTrailingSlash(tarball_destination_dir).len + tarball_name.len - 1 :0],
+                tarball_destination_dir.len,
+            };
+        }
     }
 
     pub fn fmtTarballFilename(package_name: string, package_version: string, style: TarballNameFormatter.Style) TarballNameFormatter {
@@ -1843,7 +1943,7 @@ pub const PackCommand = struct {
             raw,
         };
 
-        pub fn format(this: TarballNameFormatter, comptime _: string, _: std.fmt.FormatOptions, writer: anytype) !void {
+        pub fn format(this: TarballNameFormatter, writer: *std.Io.Writer) std.Io.Writer.Error!void {
             if (this.style == .raw) {
                 return writer.print("{s}-{s}.tgz", .{ this.package_name, this.package_version });
             }
@@ -1879,7 +1979,7 @@ pub const PackCommand = struct {
         root_dir: std.fs.Dir,
         edited_package_json: string,
     ) OOM!*Archive.Entry {
-        const stat = bun.sys.fstatat(bun.toFD(root_dir), "package.json").unwrap() catch |err| {
+        const stat = bun.sys.fstatat(.fromStdDir(root_dir), "package.json").unwrap() catch |err| {
             Output.err(err, "failed to stat package.json", .{});
             Global.crash();
         };
@@ -1915,7 +2015,7 @@ pub const PackCommand = struct {
         file_reader: *BufferedFileReader,
         archive: *Archive,
         entry: *Archive.Entry,
-        print_buf: *std.ArrayList(u8),
+        print_buf: *std.array_list.Managed(u8),
         bins: []const BinInfo,
     ) OOM!*Archive.Entry {
         const print_buf_writer = print_buf.writer();
@@ -1952,6 +2052,7 @@ pub const PackCommand = struct {
 
         file_reader.* = .{
             .unbuffered_reader = File.from(file).reader(),
+            .buf = undefined,
         };
 
         var read = file_reader.read(read_buf) catch |err| {
@@ -1969,7 +2070,7 @@ pub const PackCommand = struct {
         return entry.clear();
     }
 
-    /// Strip workspace protocols from dependency versions then
+    /// Strips workspace and catalog protocols from dependency versions then
     /// returns the printed json
     fn editRootPackageJSON(
         allocator: std.mem.Allocator,
@@ -2027,7 +2128,7 @@ pub const PackCommand = struct {
                                                 allocator,
                                                 E.String,
                                                 .{
-                                                    .data = try std.fmt.allocPrint(allocator, "{s}{}", .{
+                                                    .data = try std.fmt.allocPrint(allocator, "{s}{f}", .{
                                                         switch (c) {
                                                             '^' => "^",
                                                             '~' => "~",
@@ -2060,6 +2161,48 @@ pub const PackCommand = struct {
                                     },
                                     .{},
                                 );
+                            } else if (strings.withoutPrefixIfPossibleComptime(package_spec, "catalog:")) |catalog_name_str| {
+                                const dep_name_str = dependency.key.?.asString(allocator).?;
+
+                                const lockfile = maybe_lockfile orelse {
+                                    Output.errGeneric("Failed to resolve catalog version for \"{s}\" in `{s}` (catalogs require a lockfile).", .{
+                                        dep_name_str,
+                                        dependency_group,
+                                    });
+                                    Global.crash();
+                                };
+
+                                const catalog_name = Semver.String.init(catalog_name_str, catalog_name_str);
+
+                                const catalog = lockfile.catalogs.getGroup(lockfile.buffers.string_bytes.items, catalog_name, catalog_name_str) orelse {
+                                    Output.errGeneric("Failed to resolve catalog version for \"{s}\" in `{s}` (no matching catalog).", .{
+                                        dep_name_str,
+                                        dependency_group,
+                                    });
+                                    Global.crash();
+                                };
+
+                                const dep_name = Semver.String.init(dep_name_str, dep_name_str);
+
+                                const dep = catalog.getContext(dep_name, Semver.String.ArrayHashContext{
+                                    .arg_buf = dep_name_str,
+                                    .existing_buf = lockfile.buffers.string_bytes.items,
+                                }) orelse {
+                                    Output.errGeneric("Failed to resolve catalog version for \"{s}\" in `{s}` (no matching catalog dependency).", .{
+                                        dep_name_str,
+                                        dependency_group,
+                                    });
+                                    Global.crash();
+                                };
+
+                                dependency.value = Expr.allocate(
+                                    allocator,
+                                    E.String,
+                                    .{
+                                        .data = try allocator.dupe(u8, dep.version.literal.slice(lockfile.buffers.string_bytes.items)),
+                                    },
+                                    .{},
+                                );
                             }
                         }
                     },
@@ -2069,7 +2212,7 @@ pub const PackCommand = struct {
         }
 
         const has_trailing_newline = json.source.contents.len > 0 and json.source.contents[json.source.contents.len - 1] == '\n';
-        var buffer_writer = try js_printer.BufferWriter.init(allocator);
+        var buffer_writer = js_printer.BufferWriter.init(allocator);
         try buffer_writer.buffer.list.ensureTotalCapacity(allocator, json.source.contents.len + 1);
         buffer_writer.append_newline = has_trailing_newline;
         var package_json_writer = js_printer.BufferPrinter.init(buffer_writer);
@@ -2083,6 +2226,7 @@ pub const PackCommand = struct {
             &json.source,
             .{
                 .indent = json.indentation,
+                .mangled_props = null,
             },
         ) catch |err| {
             return switch (err) {
@@ -2098,18 +2242,24 @@ pub const PackCommand = struct {
         return package_json_writer.ctx.writtenWithoutTrailingZero();
     }
 
-    /// A pattern used to ignore or include
-    /// files in the project tree. Might come
-    /// from .npmignore, .gitignore, or `files`
-    /// in package.json
+    /// A glob pattern used to ignore or include files in the project tree.
+    /// Might come from .npmignore, .gitignore, or `files` in package.json
     const Pattern = struct {
-        glob: []const u8,
-        /// beginning or middle slash (leading slash was trimmed)
-        rel_path: bool,
-        // can only match directories (had an ending slash, also trimmed)
-        dirs_only: bool,
+        glob: CowString,
+        flags: Flags,
 
-        @"leading **/": bool,
+        const Flags = packed struct(u8) {
+            /// beginning or middle slash (leading slash was trimmed)
+            rel_path: bool,
+            // can only match directories (had an ending slash, also trimmed)
+            dirs_only: bool,
+
+            @"leading **/": bool,
+            /// true if the pattern starts with `!`
+            negated: bool,
+
+            _: u4 = 0,
+        };
 
         pub fn fromUTF8(allocator: std.mem.Allocator, pattern: string) OOM!?Pattern {
             var remain = pattern;
@@ -2163,15 +2313,32 @@ pub const PackCommand = struct {
             }
 
             return .{
-                .glob = buf[0..end],
-                .rel_path = has_leading_or_middle_slash,
-                .@"leading **/" = @"has leading **/, (could start with '!')",
-                .dirs_only = has_trailing_slash,
+                .glob = CowString.initOwned(buf[0..end], allocator),
+                .flags = .{
+                    .rel_path = has_leading_or_middle_slash,
+                    .@"leading **/" = @"has leading **/, (could start with '!')",
+                    .dirs_only = has_trailing_slash,
+                    .negated = add_negate,
+                },
+            };
+        }
+
+        /// Invert a negated pattern to a positive pattern
+        pub fn asPositive(this: *const Pattern) Pattern {
+            bun.assertWithLocation(this.flags.negated and this.glob.length() > 0, @src());
+            return Pattern{
+                .glob = this.glob.borrowSubslice(1, null), // remove the leading `!`
+                .flags = .{
+                    .rel_path = this.flags.rel_path,
+                    .dirs_only = this.flags.dirs_only,
+                    .@"leading **/" = this.flags.@"leading **/",
+                    .negated = false,
+                },
             };
         }
 
         pub fn deinit(this: Pattern, allocator: std.mem.Allocator) void {
-            allocator.free(this.glob);
+            this.glob.deinit(allocator);
         }
     };
 
@@ -2189,13 +2356,15 @@ pub const PackCommand = struct {
             default,
             @".npmignore",
             @".gitignore",
+            /// Exclusion pattern in "files" field within `package.json`
+            @"package.json",
         };
 
         pub const List = std.ArrayListUnmanaged(IgnorePatterns);
 
         fn ignoreFileFail(dir: std.fs.Dir, ignore_kind: Kind, reason: enum { read, open }, err: anyerror) noreturn {
             var buf: PathBuffer = undefined;
-            const dir_path = bun.getFdPath(dir, &buf) catch "";
+            const dir_path = bun.getFdPath(.fromStdDir(dir), &buf) catch "";
             Output.err(err, "failed to {s} {s} at: \"{s}{s}{s}\"", .{
                 @tagName(reason),
                 @tagName(ignore_kind),
@@ -2269,7 +2438,7 @@ pub const PackCommand = struct {
                 const parsed = try Pattern.fromUTF8(allocator, trimmed) orelse continue;
                 try patterns.append(allocator, parsed);
 
-                has_rel_path = has_rel_path or parsed.rel_path;
+                has_rel_path = has_rel_path or parsed.flags.rel_path;
             }
 
             if (patterns.items.len == 0) return null;
@@ -2283,8 +2452,8 @@ pub const PackCommand = struct {
         }
 
         pub fn deinit(this: *const IgnorePatterns, allocator: std.mem.Allocator) void {
-            for (this.list) |pattern_info| {
-                allocator.free(pattern_info.glob);
+            for (this.list) |*pattern_info| {
+                pattern_info.glob.deinit(allocator);
             }
             allocator.free(this.list);
         }
@@ -2292,16 +2461,17 @@ pub const PackCommand = struct {
 
     fn printArchivedFilesAndPackages(
         ctx: *Context,
-        root_dir: std.fs.Dir,
+        root_dir_std: std.fs.Dir,
         comptime is_dry_run: bool,
         pack_list: if (is_dry_run) *PackQueue else PackList,
         package_json_len: usize,
     ) void {
-        if (ctx.manager.options.log_level == .silent) return;
-        const packed_fmt = "<r><b><cyan>packed<r> {} {s}";
+        const root_dir = bun.FD.fromStdDir(root_dir_std);
+        if (ctx.manager.options.log_level == .silent or ctx.manager.options.log_level == .quiet) return;
+        const packed_fmt = "<r><b><cyan>packed<r> {f} {s}";
 
         if (comptime is_dry_run) {
-            const package_json_stat = bun.sys.fstatat(bun.toFD(root_dir), "package.json").unwrap() catch |err| {
+            const package_json_stat = root_dir.statat("package.json").unwrap() catch |err| {
                 Output.err(err, "failed to stat package.json", .{});
                 Global.crash();
             };
@@ -2313,9 +2483,13 @@ pub const PackCommand = struct {
                 "package.json",
             });
 
-            while (pack_list.removeOrNull()) |filename| {
-                const stat = bun.sys.fstatat(bun.toFD(root_dir), filename).unwrap() catch |err| {
-                    Output.err(err, "failed to stat file: \"{s}\"", .{filename});
+            while (pack_list.removeOrNull()) |item| {
+                const stat = root_dir.statat(item.path).unwrap() catch |err| {
+                    if (item.optional) {
+                        ctx.stats.total_files -= 1;
+                        continue;
+                    }
+                    Output.err(err, "failed to stat file: \"{s}\"", .{item.path});
                     Global.crash();
                 };
 
@@ -2323,7 +2497,7 @@ pub const PackCommand = struct {
 
                 Output.prettyln(packed_fmt, .{
                     bun.fmt.size(stat.size, .{ .space_between_number_and_unit = false }),
-                    filename,
+                    item.path,
                 });
             }
 
@@ -2355,25 +2529,44 @@ pub const PackCommand = struct {
 
         Output.flush();
     }
+
+    /// Some files are always packed, even if they are explicitly ignored or not
+    /// included in package.json "files".
+    fn isUnconditionallyIncludedFile(filename: []const u8) bool {
+        return filename.len > 5 and (stringsEql(filename, "package.json") or
+            isSpecialFileOrVariant(filename, "LICENSE") or
+            isSpecialFileOrVariant(filename, "LICENCE") or // THIS IS SPELLED DIFFERENTLY
+            isSpecialFileOrVariant(filename, "README"));
+    }
+
+    // TODO: should this be case insensitive on all platforms?
+    const stringsEql = if (Environment.isLinux)
+        strings.eqlComptime
+    else
+        strings.eqlCaseInsensitiveASCIIICheckLength;
+
+    fn isSpecialFileOrVariant(filename: []const u8, comptime name: []const u8) callconv(bun.callconv_inline) bool {
+        return switch (filename.len) {
+            inline 0...name.len - 1 => false,
+            inline name.len => stringsEql(filename, name),
+            inline name.len + 1 => false,
+            else => blk: {
+                bun.unsafeAssert(filename.len > name.len + 1);
+                break :blk filename[name.len] == '.' and stringsEql(filename[0..name.len], name);
+            },
+        };
+    }
 };
 
 pub const bindings = struct {
-    const JSC = bun.JSC;
-    const JSValue = JSC.JSValue;
-    const JSGlobalObject = JSC.JSGlobalObject;
-    const CallFrame = JSC.CallFrame;
-    const ZigString = JSC.ZigString;
+    const jsc = bun.jsc;
+    const JSValue = jsc.JSValue;
+    const JSGlobalObject = jsc.JSGlobalObject;
+    const CallFrame = jsc.CallFrame;
+    const ZigString = jsc.ZigString;
     const String = bun.String;
-    const JSArray = JSC.JSArray;
-    const JSObject = JSC.JSObject;
-
-    // pub fn generate(global: *JSGlobalObject) JSValue {
-    //     const obj = JSValue.createEmptyObject(global, 1);
-
-    //     const readTarEntries = ZigString.static("readTarEntries");
-    //     obj.put(global, readTarEntries, JSC.createCallback(global, readTarEntries, 1, jsReadTarEntries));
-    //     return obj;
-    // }
+    const JSArray = jsc.JSArray;
+    const JSObject = jsc.JSObject;
 
     pub fn jsReadTarball(global: *JSGlobalObject, callFrame: *CallFrame) bun.JSError!JSValue {
         const args = callFrame.arguments_old(1).slice();
@@ -2381,13 +2574,13 @@ pub const bindings = struct {
             return global.throw("expected tarball path string argument", .{});
         }
 
-        const tarball_path_str = args[0].toBunString(global);
+        const tarball_path_str = try args[0].toBunString(global);
         defer tarball_path_str.deref();
 
         const tarball_path = tarball_path_str.toUTF8(bun.default_allocator);
         defer tarball_path.deinit();
 
-        const tarball_file = File.from(std.fs.openFileAbsolute(tarball_path.slice(), .{}) catch |err| {
+        const tarball_file = File.from(std.fs.cwd().openFile(tarball_path.slice(), .{}) catch |err| {
             return global.throw("failed to open tarball file \"{s}\": {s}", .{ tarball_path.slice(), @errorName(err) });
         });
         defer tarball_file.close();
@@ -2402,7 +2595,7 @@ pub const bindings = struct {
         defer sha1.deinit();
         sha1.update(tarball);
         sha1.final(&sha1_digest);
-        const shasum_str = String.createFormat("{s}", .{std.fmt.bytesToHex(sha1_digest, .lower)}) catch bun.outOfMemory();
+        const shasum_str = bun.handleOom(String.createFormat("{s}", .{std.fmt.bytesToHex(sha1_digest, .lower)}));
 
         var sha512_digest: sha.SHA512.Digest = undefined;
         var sha512 = sha.SHA512.init();
@@ -2411,7 +2604,7 @@ pub const bindings = struct {
         sha512.final(&sha512_digest);
         var base64_buf: [std.base64.standard.Encoder.calcSize(sha.SHA512.digest)]u8 = undefined;
         const encode_count = bun.simdutf.base64.encode(&sha512_digest, &base64_buf, false);
-        const integrity_str = String.createUTF8(base64_buf[0..encode_count]);
+        const integrity_value = try String.createUTF8ForJS(global, base64_buf[0..encode_count]);
 
         const EntryInfo = struct {
             pathname: String,
@@ -2420,7 +2613,7 @@ pub const bindings = struct {
             size: ?usize = null,
             contents: ?String = null,
         };
-        var entries_info = std.ArrayList(EntryInfo).init(bun.default_allocator);
+        var entries_info = std.array_list.Managed(EntryInfo).init(bun.default_allocator);
         defer entries_info.deinit();
 
         const archive = Archive.readNew();
@@ -2461,7 +2654,7 @@ pub const bindings = struct {
         var archive_entry: *Archive.Entry = undefined;
         var header_status = archive.readNextHeader(&archive_entry);
 
-        var read_buf = std.ArrayList(u8).init(bun.default_allocator);
+        var read_buf = std.array_list.Managed(u8).init(bun.default_allocator);
         defer read_buf.deinit();
 
         while (header_status != .eof) : (header_status = archive.readNextHeader(&archive_entry)) {
@@ -2472,33 +2665,42 @@ pub const bindings = struct {
                     return global.throw("failed to read archive header: {s}", .{Archive.errorString(@ptrCast(archive))});
                 },
                 else => {
-                    const pathname = archive_entry.pathname();
-                    const kind = bun.C.kindFromMode(archive_entry.filetype());
+                    const pathname_string = if (bun.Environment.isWindows) blk: {
+                        const pathname_w = archive_entry.pathnameW();
+                        const list = std.array_list.Managed(u8).init(bun.default_allocator);
+                        var result = bun.handleOom(bun.strings.toUTF8ListWithType(list, pathname_w));
+                        defer result.deinit();
+                        break :blk String.cloneUTF8(result.items);
+                    } else String.cloneUTF8(archive_entry.pathname());
+
+                    const kind = bun.sys.kindFromMode(archive_entry.filetype());
                     const perm = archive_entry.perm();
 
                     var entry_info: EntryInfo = .{
-                        .pathname = String.createUTF8(pathname),
+                        .pathname = pathname_string,
                         .kind = String.static(@tagName(kind)),
                         .perm = perm,
                     };
 
                     if (kind == .file) {
                         const size: usize = @intCast(archive_entry.size());
-                        read_buf.resize(size) catch bun.outOfMemory();
+                        bun.handleOom(read_buf.resize(size));
                         defer read_buf.clearRetainingCapacity();
 
                         const read = archive.readData(read_buf.items);
                         if (read < 0) {
-                            return global.throw("failed to read archive entry \"{}\": {s}", .{
-                                bun.fmt.fmtPath(u8, pathname, .{}),
+                            const pathname_utf8 = pathname_string.toUTF8(bun.default_allocator);
+                            defer pathname_utf8.deinit();
+                            return global.throw("failed to read archive entry \"{s}\": {s}", .{
+                                pathname_utf8.slice(),
                                 Archive.errorString(@ptrCast(archive)),
                             });
                         }
                         read_buf.items.len = @intCast(read);
-                        entry_info.contents = String.createUTF8(read_buf.items);
+                        entry_info.contents = String.cloneUTF8(read_buf.items);
                     }
 
-                    entries_info.append(entry_info) catch bun.outOfMemory();
+                    bun.handleOom(entries_info.append(entry_info));
                 },
             }
         }
@@ -2516,25 +2718,65 @@ pub const bindings = struct {
             else => {},
         }
 
-        const entries = JSArray.createEmpty(global, entries_info.items.len);
+        const entries = try JSArray.createEmpty(global, entries_info.items.len);
 
         for (entries_info.items, 0..) |entry, i| {
-            const obj = JSValue.createEmptyObject(global, 4);
+            const obj = JSValue.createEmptyObject(global, 0);
             obj.put(global, "pathname", entry.pathname.toJS(global));
             obj.put(global, "kind", entry.kind.toJS(global));
             obj.put(global, "perm", JSValue.jsNumber(entry.perm));
             if (entry.contents) |contents| {
                 obj.put(global, "contents", contents.toJS(global));
             }
-            entries.putIndex(global, @intCast(i), obj);
+            try entries.putIndex(global, @intCast(i), obj);
         }
 
-        const result = JSValue.createEmptyObject(global, 2);
+        const result = JSValue.createEmptyObject(global, 4);
         result.put(global, "entries", entries);
         result.put(global, "size", JSValue.jsNumber(tarball.len));
         result.put(global, "shasum", shasum_str.toJS(global));
-        result.put(global, "integrity", integrity_str.toJS(global));
+        result.put(global, "integrity", integrity_value);
 
         return result;
     }
 };
+
+const string = []const u8;
+const stringZ = [:0]const u8;
+
+const std = @import("std");
+
+const libarchive = @import("../libarchive/libarchive.zig").lib;
+const Archive = libarchive.Archive;
+
+const bun = @import("bun");
+const DirIterator = bun.DirIterator;
+const Environment = bun.Environment;
+const FD = bun.FD;
+const FileDescriptor = bun.FileDescriptor;
+const Global = bun.Global;
+const JSON = bun.json;
+const OOM = bun.OOM;
+const Output = bun.Output;
+const PathBuffer = bun.PathBuffer;
+const Progress = bun.Progress;
+const RunCommand = bun.RunCommand;
+const Semver = bun.Semver;
+const glob = bun.glob;
+const js_printer = bun.js_printer;
+const sha = bun.sha;
+const strings = bun.strings;
+const CowString = bun.ptr.CowString;
+const File = bun.sys.File;
+
+const Command = bun.cli.Command;
+const Publish = bun.cli.PublishCommand;
+
+const Install = bun.install;
+const Dependency = Install.Dependency;
+const Lockfile = Install.Lockfile;
+const PackageManager = Install.PackageManager;
+const LogLevel = PackageManager.Options.LogLevel;
+
+const E = bun.js_parser.E;
+const Expr = bun.js_parser.Expr;

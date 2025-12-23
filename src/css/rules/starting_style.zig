@@ -1,13 +1,5 @@
-const std = @import("std");
 pub const css = @import("../css_parser.zig");
-const bun = @import("root").bun;
-const Error = css.Error;
-const ArrayList = std.ArrayListUnmanaged;
-const MediaList = css.MediaList;
-const CustomMedia = css.CustomMedia;
 const Printer = css.Printer;
-const Maybe = css.Maybe;
-const PrinterError = css.PrinterError;
 const PrintErr = css.PrintErr;
 const Location = css.css_rules.Location;
 const style = css.css_rules.style;
@@ -23,7 +15,7 @@ pub fn StartingStyleRule(comptime R: type) type {
 
         const This = @This();
 
-        pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+        pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
             // #[cfg(feature = "sourcemap")]
             // dest.add_mapping(self.loc);
 
@@ -32,7 +24,7 @@ pub fn StartingStyleRule(comptime R: type) type {
             try dest.writeChar('{');
             dest.indent();
             try dest.newline();
-            try this.rules.toCss(W, dest);
+            try this.rules.toCss(dest);
             dest.dedent();
             try dest.newline();
             try dest.writeChar('}');
@@ -43,3 +35,5 @@ pub fn StartingStyleRule(comptime R: type) type {
         }
     };
 }
+
+const std = @import("std");

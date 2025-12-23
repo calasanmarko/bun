@@ -65,6 +65,7 @@ private:
     bool m_isWasmFrame = false;
 
     bool m_isFunctionOrEval = false;
+    bool m_isAsync = false;
 
     enum class SourcePositionsState {
         NotCalculated,
@@ -89,6 +90,7 @@ public:
     JSC::JSString* typeName();
 
     bool isFunctionOrEval() const { return m_isFunctionOrEval; }
+    bool isAsync() const { return m_isAsync; }
 
     bool hasBytecodeIndex() const { return (m_bytecodeIndex.offset() != UINT_MAX) && !m_isWasmFrame; }
     JSC::BytecodeIndex bytecodeIndex() const
@@ -132,7 +134,7 @@ public:
     }
     bool isConstructor() const
     {
-        return m_codeBlock && (JSC::CodeForConstruct == m_codeBlock->specializationKind());
+        return m_codeBlock && (JSC::CodeSpecializationKind::CodeForConstruct == m_codeBlock->specializationKind());
     }
 
 private:
@@ -179,15 +181,6 @@ public:
 
     static JSCStackTrace fromExisting(JSC::VM& vm, const WTF::Vector<JSC::StackFrame>& existingFrames);
 
-    /* This is based on JSC::Interpreter::getStackTrace, but skips native (non js and not wasm)
-     * frames, which is what v8 does. Note that we could have just called JSC::Interpreter::getStackTrace
-     * and and filter it later (or let our callers filter it), but that would have been both inefficient, and
-     * problematic with the requested stack size limit (as it should only refer to the non-native frames,
-     * thus we would have needed to pass a large limit to JSC::Interpreter::getStackTrace, and filter out
-     * maxStackSize non-native frames).
-     *
-     * Return value must remain stack allocated. */
-    static JSCStackTrace captureCurrentJSStackTrace(Zig::GlobalObject* globalObject, JSC::CallFrame* callFrame, size_t frameLimit, JSC::JSValue caller);
     static void getFramesForCaller(JSC::VM& vm, JSC::CallFrame* callFrame, JSC::JSCell* owner, JSC::JSValue caller, WTF::Vector<JSC::StackFrame>& stackTrace, size_t stackTraceLimit);
 
     /* In JSC, JSC::Exception points to the actual value that was thrown, usually
@@ -227,6 +220,11 @@ String sourceURL(JSC::VM& vm, const JSC::StackFrame& frame);
 String sourceURL(JSC::StackVisitor& visitor);
 String sourceURL(JSC::VM& vm, JSC::JSFunction* function);
 
+enum class FinalizerSafety {
+    NotInFinalizer,
+    MustNotTriggerGC,
+};
+
 class FunctionNameFlags {
 public:
     static constexpr unsigned None = 0;
@@ -239,6 +237,6 @@ public:
 
 String functionName(JSC::VM& vm, JSC::CodeBlock* codeBlock);
 String functionName(JSC::VM& vm, JSC::JSGlobalObject* lexicalGlobalObject, JSC::JSObject* callee);
-String functionName(JSC::VM& vm, JSC::JSGlobalObject* lexicalGlobalObject, const JSC::StackFrame& frame, bool isInFinalizer, unsigned int* flags);
+String functionName(JSC::VM& vm, JSC::JSGlobalObject* lexicalGlobalObject, const JSC::StackFrame& frame, FinalizerSafety, unsigned int* flags);
 
 }

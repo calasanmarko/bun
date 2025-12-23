@@ -1,9 +1,3 @@
-const std = @import("std");
-const Allocator = std.mem.Allocator;
-const bun = @import("root").bun;
-const logger = bun.logger;
-const Log = logger.Log;
-
 pub const css = @import("../css_parser.zig");
 pub const css_values = @import("../values/values.zig");
 pub const Printer = css.Printer;
@@ -36,8 +30,6 @@ const ComponentParser = css.css_values.color.ComponentParser;
 const SupportsCondition = css.SupportsCondition;
 const ColorFallbackKind = css.ColorFallbackKind;
 
-const ArrayList = std.ArrayListUnmanaged;
-
 /// PERF: nullable optimization
 pub const TokenList = struct {
     v: std.ArrayListUnmanaged(TokenOrValue) = .{},
@@ -53,8 +45,7 @@ pub const TokenList = struct {
 
     pub fn toCss(
         this: *const This,
-        comptime W: type,
-        dest: *Printer(W),
+        dest: *Printer,
         is_custom_property: bool,
     ) PrintErr!void {
         if (!dest.minify and this.v.items.len == 1 and this.v.items[0].isWhitespace()) {
@@ -65,11 +56,11 @@ pub const TokenList = struct {
         for (this.v.items, 0..) |*token_or_value, i| {
             switch (token_or_value.*) {
                 .color => |color| {
-                    try color.toCss(W, dest);
+                    try color.toCss(dest);
                     has_whitespace = false;
                 },
                 .unresolved_color => |color| {
-                    try color.toCss(W, dest, is_custom_property);
+                    try color.toCss(dest, is_custom_property);
                     has_whitespace = false;
                 },
                 .url => |url| {
@@ -78,45 +69,45 @@ pub const TokenList = struct {
                             .ambiguous_url_in_custom_property = .{ .url = (try dest.getImportRecords()).at(url.import_record_idx).path.pretty },
                         }, url.loc);
                     }
-                    try url.toCss(W, dest);
+                    try url.toCss(dest);
                     has_whitespace = false;
                 },
                 .@"var" => |@"var"| {
-                    try @"var".toCss(W, dest, is_custom_property);
-                    has_whitespace = try this.writeWhitespaceIfNeeded(i, W, dest);
+                    try @"var".toCss(dest, is_custom_property);
+                    has_whitespace = try this.writeWhitespaceIfNeeded(i, dest);
                 },
                 .env => |env| {
-                    try env.toCss(W, dest, is_custom_property);
-                    has_whitespace = try this.writeWhitespaceIfNeeded(i, W, dest);
+                    try env.toCss(dest, is_custom_property);
+                    has_whitespace = try this.writeWhitespaceIfNeeded(i, dest);
                 },
                 .function => |f| {
-                    try f.toCss(W, dest, is_custom_property);
-                    has_whitespace = try this.writeWhitespaceIfNeeded(i, W, dest);
+                    try f.toCss(dest, is_custom_property);
+                    has_whitespace = try this.writeWhitespaceIfNeeded(i, dest);
                 },
                 .length => |v| {
                     // Do not serialize unitless zero lengths in custom properties as it may break calc().
                     const value, const unit = v.toUnitValue();
-                    try css.serializer.serializeDimension(value, unit, W, dest);
+                    try css.serializer.serializeDimension(value, unit, dest);
                     has_whitespace = false;
                 },
                 .angle => |v| {
-                    try v.toCss(W, dest);
+                    try v.toCss(dest);
                     has_whitespace = false;
                 },
                 .time => |v| {
-                    try v.toCss(W, dest);
+                    try v.toCss(dest);
                     has_whitespace = false;
                 },
                 .resolution => |v| {
-                    try v.toCss(W, dest);
+                    try v.toCss(dest);
                     has_whitespace = false;
                 },
                 .dashed_ident => |v| {
-                    try DashedIdentFns.toCss(&v, W, dest);
+                    try DashedIdentFns.toCss(&v, dest);
                     has_whitespace = false;
                 },
                 .animation_name => |v| {
-                    try v.toCss(W, dest);
+                    try v.toCss(dest);
                     has_whitespace = false;
                 },
                 .token => |token| switch (token) {
@@ -138,19 +129,19 @@ pub const TokenList = struct {
                         has_whitespace = true;
                     },
                     .close_paren, .close_square, .close_curly => {
-                        try token.toCss(W, dest);
-                        has_whitespace = try this.writeWhitespaceIfNeeded(i, W, dest);
+                        try token.toCss(dest);
+                        has_whitespace = try this.writeWhitespaceIfNeeded(i, dest);
                     },
                     .dimension => {
-                        try css.serializer.serializeDimension(token.dimension.num.value, token.dimension.unit, W, dest);
+                        try css.serializer.serializeDimension(token.dimension.num.value, token.dimension.unit, dest);
                         has_whitespace = false;
                     },
                     .number => |v| {
-                        try css.css_values.number.CSSNumberFns.toCss(&v.value, W, dest);
+                        try css.css_values.number.CSSNumberFns.toCss(&v.value, dest);
                         has_whitespace = false;
                     },
                     else => {
-                        try token.toCss(W, dest);
+                        try token.toCss(dest);
                         has_whitespace = token == .whitespace;
                     },
                 },
@@ -158,10 +149,10 @@ pub const TokenList = struct {
         }
     }
 
-    pub fn toCssRaw(this: *const TokenList, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCssRaw(this: *const TokenList, dest: *Printer) PrintErr!void {
         for (this.v.items) |*token_or_value| {
             if (token_or_value.* == .token) {
-                try token_or_value.token.toCss(W, dest);
+                try token_or_value.token.toCss(dest);
             } else {
                 return dest.addFmtError();
             }
@@ -171,15 +162,15 @@ pub const TokenList = struct {
     pub fn writeWhitespaceIfNeeded(
         this: *const This,
         i: usize,
-        comptime W: type,
-        dest: *Printer(W),
+        dest: *Printer,
     ) PrintErr!bool {
         if (!dest.minify and
             i != this.v.items.len - 1 and
             !(this.v.items[i + 1] == .token and switch (this.v.items[i + 1].token) {
-            .comma, .close_paren => true,
-            else => false,
-        })) {
+                .comma, .close_paren => true,
+                else => false,
+            }))
+        {
             // Whitespace is removed during parsing, so add it back if we aren't minifying.
             try dest.writeChar(' ');
             return true;
@@ -312,7 +303,7 @@ pub const TokenList = struct {
             }
         }
 
-        return .{ .result = {} };
+        return .success;
     }
 
     pub fn parseInto(
@@ -355,14 +346,14 @@ pub const TokenList = struct {
                             .{ .color = color },
                         ) catch unreachable;
                         last_is_delim = false;
-                        last_is_whitespace = true;
+                        last_is_whitespace = false;
                     } else if (input.tryParse(UnresolvedColor.parse, .{ f, options }).asValue()) |color| {
                         tokens.append(
                             input.allocator(),
                             .{ .unresolved_color = color },
                         ) catch unreachable;
                         last_is_delim = false;
-                        last_is_whitespace = true;
+                        last_is_whitespace = false;
                     } else if (bun.strings.eql(f, "url")) {
                         input.reset(&state);
                         tokens.append(
@@ -598,12 +589,12 @@ pub const TokenList = struct {
             last_is_whitespace = false;
         }
 
-        return .{ .result = {} };
+        return .success;
     }
 
     pub fn getFallback(this: *const TokenList, allocator: Allocator, kind: ColorFallbackKind) @This() {
         var tokens = TokenList{};
-        tokens.v.ensureTotalCapacity(allocator, this.v.items.len) catch bun.outOfMemory();
+        bun.handleOom(tokens.v.ensureTotalCapacity(allocator, this.v.items.len));
         tokens.v.items.len = this.v.items.len;
         for (this.v.items, tokens.v.items[0..this.v.items.len]) |*old, *new| {
             new.* = switch (old.*) {
@@ -624,17 +615,17 @@ pub const TokenList = struct {
         // the original declaration. The remaining fallbacks need to be added as @supports rules.
         var fallbacks = this.getNecessaryFallbacks(targets);
         const lowest_fallback = fallbacks.lowest();
-        fallbacks.remove(lowest_fallback);
+        bun.bits.remove(ColorFallbackKind, &fallbacks, lowest_fallback);
 
         var res = css.SmallList(Fallbacks, 2){};
-        if (fallbacks.contains(ColorFallbackKind.P3)) {
+        if (fallbacks.p3) {
             res.appendAssumeCapacity(.{
                 ColorFallbackKind.P3.supportsCondition(),
                 this.getFallback(allocator, ColorFallbackKind.P3),
             });
         }
 
-        if (fallbacks.contains(ColorFallbackKind.LAB)) {
+        if (fallbacks.lab) {
             res.appendAssumeCapacity(.{
                 ColorFallbackKind.LAB.supportsCondition(),
                 this.getFallback(allocator, ColorFallbackKind.LAB),
@@ -669,23 +660,23 @@ pub const TokenList = struct {
     }
 
     pub fn getNecessaryFallbacks(this: *const TokenList, targets: css.targets.Targets) ColorFallbackKind {
-        var fallbacks = ColorFallbackKind.empty();
+        var fallbacks = ColorFallbackKind{};
         for (this.v.items) |*token_or_value| {
             switch (token_or_value.*) {
                 .color => |*color| {
-                    fallbacks.insert(color.getPossibleFallbacks(targets));
+                    bun.bits.insert(ColorFallbackKind, &fallbacks, color.getPossibleFallbacks(targets));
                 },
                 .function => |*f| {
-                    fallbacks.insert(f.arguments.getNecessaryFallbacks(targets));
+                    bun.bits.insert(ColorFallbackKind, &fallbacks, f.arguments.getNecessaryFallbacks(targets));
                 },
                 .@"var" => |*v| {
                     if (v.fallback) |*fallback| {
-                        fallbacks.insert(fallback.getNecessaryFallbacks(targets));
+                        bun.bits.insert(ColorFallbackKind, &fallbacks, fallback.getNecessaryFallbacks(targets));
                     }
                 },
                 .env => |*v| {
                     if (v.fallback) |*fallback| {
-                        fallbacks.insert(fallback.getNecessaryFallbacks(targets));
+                        bun.bits.insert(ColorFallbackKind, &fallbacks, fallback.getNecessaryFallbacks(targets));
                     }
                 },
                 else => {},
@@ -795,13 +786,12 @@ pub const UnresolvedColor = union(enum) {
 
     pub fn toCss(
         this: *const This,
-        comptime W: type,
-        dest: *Printer(W),
+        dest: *Printer,
         is_custom_property: bool,
     ) PrintErr!void {
         const Helper = struct {
             pub fn conv(c: f32) i32 {
-                return @intFromFloat(bun.clamp(@round(c * 255.0), 0.0, 255.0));
+                return bun.intFromFloat(i32, bun.clamp(@round(c * 255.0), 0.0, 255.0));
             }
         };
 
@@ -809,48 +799,48 @@ pub const UnresolvedColor = union(enum) {
             .RGB => |rgb| {
                 if (dest.targets.shouldCompileSame(.space_separated_color_notation)) {
                     try dest.writeStr("rgba(");
-                    try css.to_css.integer(i32, Helper.conv(rgb.r), W, dest);
+                    try css.to_css.integer(i32, Helper.conv(rgb.r), dest);
                     try dest.delim(',', false);
-                    try css.to_css.integer(i32, Helper.conv(rgb.g), W, dest);
+                    try css.to_css.integer(i32, Helper.conv(rgb.g), dest);
                     try dest.delim(',', false);
-                    try css.to_css.integer(i32, Helper.conv(rgb.b), W, dest);
-                    try rgb.alpha.toCss(W, dest, is_custom_property);
+                    try css.to_css.integer(i32, Helper.conv(rgb.b), dest);
+                    try rgb.alpha.toCss(dest, is_custom_property);
                     try dest.writeChar(')');
                     return;
                 }
 
                 try dest.writeStr("rgb(");
-                try css.to_css.integer(i32, Helper.conv(rgb.r), W, dest);
+                try css.to_css.integer(i32, Helper.conv(rgb.r), dest);
                 try dest.writeChar(' ');
-                try css.to_css.integer(i32, Helper.conv(rgb.g), W, dest);
+                try css.to_css.integer(i32, Helper.conv(rgb.g), dest);
                 try dest.writeChar(' ');
-                try css.to_css.integer(i32, Helper.conv(rgb.b), W, dest);
+                try css.to_css.integer(i32, Helper.conv(rgb.b), dest);
                 try dest.delim('/', true);
-                try rgb.alpha.toCss(W, dest, is_custom_property);
+                try rgb.alpha.toCss(dest, is_custom_property);
                 try dest.writeChar(')');
             },
             .HSL => |hsl| {
                 if (dest.targets.shouldCompileSame(.space_separated_color_notation)) {
                     try dest.writeStr("hsla(");
-                    try CSSNumberFns.toCss(&hsl.h, W, dest);
+                    try CSSNumberFns.toCss(&hsl.h, dest);
                     try dest.delim(',', false);
-                    try (Percentage{ .v = hsl.s }).toCss(W, dest);
+                    try (Percentage{ .v = hsl.s }).toCss(dest);
                     try dest.delim(',', false);
-                    try (Percentage{ .v = hsl.l }).toCss(W, dest);
+                    try (Percentage{ .v = hsl.l }).toCss(dest);
                     try dest.delim(',', false);
-                    try hsl.alpha.toCss(W, dest, is_custom_property);
+                    try hsl.alpha.toCss(dest, is_custom_property);
                     try dest.writeChar(')');
                     return;
                 }
 
                 try dest.writeStr("hsl(");
-                try CSSNumberFns.toCss(&hsl.h, W, dest);
+                try CSSNumberFns.toCss(&hsl.h, dest);
                 try dest.writeChar(' ');
-                try (Percentage{ .v = hsl.s }).toCss(W, dest);
+                try (Percentage{ .v = hsl.s }).toCss(dest);
                 try dest.writeChar(' ');
-                try (Percentage{ .v = hsl.l }).toCss(W, dest);
+                try (Percentage{ .v = hsl.l }).toCss(dest);
                 try dest.delim('/', true);
-                try hsl.alpha.toCss(W, dest, is_custom_property);
+                try hsl.alpha.toCss(dest, is_custom_property);
                 try dest.writeChar(')');
                 return;
             },
@@ -861,19 +851,19 @@ pub const UnresolvedColor = union(enum) {
                 if (!dest.targets.isCompatible(.light_dark)) {
                     try dest.writeStr("var(--buncss-light");
                     try dest.delim(',', false);
-                    try light.toCss(W, dest, is_custom_property);
+                    try light.toCss(dest, is_custom_property);
                     try dest.writeChar(')');
                     try dest.whitespace();
                     try dest.writeStr("var(--buncss-dark");
                     try dest.delim(',', false);
-                    try dark.toCss(W, dest, is_custom_property);
+                    try dark.toCss(dest, is_custom_property);
                     return dest.writeChar(')');
                 }
 
                 try dest.writeStr("light-dark(");
-                try light.toCss(W, dest, is_custom_property);
+                try light.toCss(dest, is_custom_property);
                 try dest.delim(',', false);
-                try dark.toCss(W, dest, is_custom_property);
+                try dark.toCss(dest, is_custom_property);
                 try dest.writeChar(')');
             },
         }
@@ -997,10 +987,10 @@ pub const UnresolvedColor = union(enum) {
     }
 
     pub fn lightDarkOwned(allocator: Allocator, light: UnresolvedColor, dark: UnresolvedColor) UnresolvedColor {
-        var lightlist = ArrayList(TokenOrValue).initCapacity(allocator, 1) catch bun.outOfMemory();
-        lightlist.append(allocator, TokenOrValue{ .unresolved_color = light }) catch bun.outOfMemory();
-        var darklist = ArrayList(TokenOrValue).initCapacity(allocator, 1) catch bun.outOfMemory();
-        darklist.append(allocator, TokenOrValue{ .unresolved_color = dark }) catch bun.outOfMemory();
+        var lightlist = bun.handleOom(ArrayList(TokenOrValue).initCapacity(allocator, 1));
+        bun.handleOom(lightlist.append(allocator, TokenOrValue{ .unresolved_color = light }));
+        var darklist = bun.handleOom(ArrayList(TokenOrValue).initCapacity(allocator, 1));
+        bun.handleOom(darklist.append(allocator, TokenOrValue{ .unresolved_color = dark }));
         return UnresolvedColor{
             .light_dark = .{
                 .light = css.TokenList{ .v = lightlist },
@@ -1048,15 +1038,14 @@ pub const Variable = struct {
 
     pub fn toCss(
         this: *const This,
-        comptime W: type,
-        dest: *Printer(W),
+        dest: *Printer,
         is_custom_property: bool,
     ) PrintErr!void {
         try dest.writeStr("var(");
-        try this.name.toCss(W, dest);
+        try this.name.toCss(dest);
         if (this.fallback) |*fallback| {
             try dest.delim(',', false);
-            try fallback.toCss(W, dest, is_custom_property);
+            try fallback.toCss(dest, is_custom_property);
         }
         return try dest.writeChar(')');
     }
@@ -1150,21 +1139,20 @@ pub const EnvironmentVariable = struct {
 
     pub fn toCss(
         this: *const EnvironmentVariable,
-        comptime W: type,
-        dest: *Printer(W),
+        dest: *Printer,
         is_custom_property: bool,
     ) PrintErr!void {
         try dest.writeStr("env(");
-        try this.name.toCss(W, dest);
+        try this.name.toCss(dest);
 
         for (this.indices.items) |index| {
             try dest.writeChar(' ');
-            try css.to_css.integer(i32, index, W, dest);
+            try css.to_css.integer(i32, index, dest);
         }
 
         if (this.fallback) |*fallback| {
             try dest.delim(',', false);
-            try fallback.toCss(W, dest, is_custom_property);
+            try fallback.toCss(dest, is_custom_property);
         }
 
         return try dest.writeChar(')');
@@ -1173,7 +1161,7 @@ pub const EnvironmentVariable = struct {
     pub fn getFallback(this: *const EnvironmentVariable, allocator: Allocator, kind: ColorFallbackKind) @This() {
         return EnvironmentVariable{
             .name = this.name,
-            .indices = this.indices.clone(allocator) catch bun.outOfMemory(),
+            .indices = bun.handleOom(this.indices.clone(allocator)),
             .fallback = if (this.fallback) |*fallback| fallback.getFallback(allocator, kind) else null,
         };
     }
@@ -1189,7 +1177,7 @@ pub const EnvironmentVariable = struct {
     pub fn deepClone(this: *const EnvironmentVariable, allocator: Allocator) EnvironmentVariable {
         return .{
             .name = this.name,
-            .indices = this.indices.clone(allocator) catch bun.outOfMemory(),
+            .indices = bun.handleOom(this.indices.clone(allocator)),
             .fallback = if (this.fallback) |*fallback| fallback.deepClone(allocator) else null,
         };
     }
@@ -1232,11 +1220,11 @@ pub const EnvironmentVariableName = union(enum) {
         return .{ .result = .{ .unknown = ident } };
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *Printer) PrintErr!void {
         return switch (this.*) {
-            .ua => |ua| ua.toCss(W, dest),
-            .custom => |custom| custom.toCss(W, dest),
-            .unknown => |unknown| CustomIdentFns.toCss(&unknown, W, dest),
+            .ua => |ua| ua.toCss(dest),
+            .custom => |custom| custom.toCss(dest),
+            .unknown => |unknown| CustomIdentFns.toCss(&unknown, dest),
         };
     }
 };
@@ -1264,11 +1252,12 @@ pub const UAEnvironmentVariable = enum {
     /// The viewport segment right position.
     @"viewport-segment-right",
 
-    pub usingnamespace css.DefineEnumProperty(@This());
-
-    pub fn eql(lhs: *const @This(), rhs: *const @This()) bool {
-        return css.implementEql(@This(), lhs, rhs);
-    }
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 /// A custom CSS function.
@@ -1286,13 +1275,12 @@ pub const Function = struct {
 
     pub fn toCss(
         this: *const This,
-        comptime W: type,
-        dest: *Printer(W),
+        dest: *Printer,
         is_custom_property: bool,
     ) PrintErr!void {
-        try IdentFns.toCss(&this.name, W, dest);
+        try IdentFns.toCss(&this.name, dest);
         try dest.writeChar('(');
-        try this.arguments.toCss(W, dest, is_custom_property);
+        try this.arguments.toCss(dest, is_custom_property);
         return try dest.writeChar(')');
     }
 
@@ -1501,9 +1489,9 @@ pub const CustomPropertyName = union(enum) {
     /// An unknown CSS property.
     unknown: Ident,
 
-    pub fn toCss(this: *const CustomPropertyName, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const CustomPropertyName, dest: *Printer) PrintErr!void {
         return switch (this.*) {
-            .custom => |custom| try custom.toCss(W, dest),
+            .custom => |custom| try custom.toCss(dest),
             .unknown => |unknown| css.serializer.serializeIdentifier(unknown.v, dest) catch return dest.addFmtError(),
         };
     }
@@ -1554,3 +1542,9 @@ pub fn tryParseColorToken(f: []const u8, state: *const css.ParserState, input: *
 
     return null;
 }
+
+const bun = @import("bun");
+
+const std = @import("std");
+const ArrayList = std.ArrayListUnmanaged;
+const Allocator = std.mem.Allocator;

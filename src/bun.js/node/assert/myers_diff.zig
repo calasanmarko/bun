@@ -1,17 +1,10 @@
 //! ## IMPORTANT NOTE
 //!
-//! Do _NOT_ import from "root" in this file! Do _NOT_ use the Bun object in this file!
+//! Do _NOT_ import from "bun" in this file! Do _NOT_ use the Bun object in this file!
 //!
-//! This file has tests defined in it which _cannot_ be run if `@import("root")` is used!
+//! This file has tests defined in it which _cannot_ be run if `@import("bun")` is used!
 //!
 //! Run tests with `:zig test %`
-const std = @import("std");
-const builtin = @import("builtin");
-const mem = std.mem;
-const Allocator = mem.Allocator;
-const stackFallback = std.heap.stackFallback;
-const assert = std.debug.assert;
-const print = std.debug.print;
 
 /// Comptime diff configuration. Defaults are usually sufficient.
 pub const Options = struct {
@@ -51,7 +44,7 @@ const int = i64; // must be large enough to hold all valid values of `uint` w/o 
 ///
 /// ## Example
 /// ```zig
-/// const myers_diff = @import("inode/assert/myers_diff.zig");
+/// const myers_diff = @import("./inode/assert/myers_diff.zig");
 /// const StrDiffer = myers_diff.Differ([]const u8, .{});
 /// const actual = &[_][]const u8{
 ///   "foo",
@@ -158,7 +151,7 @@ pub fn DifferWithEql(comptime Line: type, comptime opts: Options, comptime areLi
             @memset(graph, 0);
             graph.len = graph_size;
 
-            var trace = std.ArrayList([]const uint).init(trace_alloc);
+            var trace = std.array_list.Managed([]const uint).init(trace_alloc);
             // reserve enough space for each frame to avoid realloc on ptr list. Lists may end up in the heap, but
             // this list is at the very from (and ∴ on stack).
             try trace.ensureTotalCapacityPrecise(max + 1);
@@ -224,7 +217,7 @@ pub fn DifferWithEql(comptime Line: type, comptime opts: Options, comptime areLi
 
         fn backtrack(
             allocator: Allocator,
-            trace: *const std.ArrayList([]const uint),
+            trace: *const std.array_list.Managed([]const uint),
             actual: []const Line,
             expected: []const Line,
         ) Error!DiffList(Line) {
@@ -298,11 +291,11 @@ pub fn DifferWithEql(comptime Line: type, comptime opts: Options, comptime areLi
     };
 }
 
-pub fn printDiff(T: type, diffs: std.ArrayList(Diff(T))) !void {
+pub fn printDiff(T: type, diffs: std.array_list.Managed(Diff(T))) !void {
     const stdout = if (builtin.is_test)
-        std.io.getStdErr().writer()
+        std.fs.File.stderr().writer()
     else
-        std.io.getStdOut().writer();
+        std.fs.File.stdout().writer();
 
     const specifier = switch (T) {
         u8 => "c",
@@ -382,7 +375,7 @@ pub const DiffKind = enum {
     delete,
     equal,
 
-    pub fn format(value: DiffKind, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(value: DiffKind, writer: *std.Io.Writer) !void {
         return switch (value) {
             .insert => writer.writeByte('+'),
             .delete => writer.writeByte('-'),
@@ -401,8 +394,7 @@ pub fn Diff(comptime T: type) type {
             return self.kind == other.kind and mem.eql(T, self.value, other.value);
         }
 
-        /// pub fn format(value: ?, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void
-        pub fn format(value: anytype, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        pub fn format(value: anytype, writer: *std.Io.Writer) !void {
             const specifier = switch (T) {
                 u8 => "c",
                 u32 => "u",
@@ -415,12 +407,11 @@ pub fn Diff(comptime T: type) type {
 }
 
 pub fn DiffList(comptime T: type) type {
-    return std.ArrayList(Diff(T));
+    return std.array_list.Managed(Diff(T));
 }
 
 // =============================================================================
 
-const t = std.testing;
 test areLinesEqual {
     // check_comma_disparity is never respected when comparing chars
     try t.expect(areLinesEqual(u8, 'a', 'a', false));
@@ -487,8 +478,8 @@ const StrDiffer = Differ([]const u8, .{ .check_comma_disparity = true });
 test StrDiffer {
     const a = t.allocator;
     inline for (.{
-        // .{ "foo", "foo" },
-        // .{ "foo", "bar" },
+        .{ "foo", "foo" },
+        .{ "foo", "bar" },
         .{
             // actual
             \\[
@@ -512,85 +503,85 @@ test StrDiffer {
             \\  7
             \\]
         },
-        // // remove line
-        // .{
-        //     \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
-        //     \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
-        //     \\nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
-        //     \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
-        //     \\fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
-        //     \\culpa qui officia deserunt mollit anim id est laborum.
-        //     ,
-        //     \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
-        //     \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
-        //     \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
-        //     \\fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
-        //     \\culpa qui officia deserunt mollit anim id est laborum.
-        //     ,
-        // },
-        // // add some line
-        // .{
-        //     \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
-        //     \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
-        //     \\nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
-        //     \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
-        //     \\fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
-        //     \\culpa qui officia deserunt mollit anim id est laborum.
-        //     ,
-        //     \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
-        //     \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
-        //     \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
-        //     \\nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
-        //     \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
-        //     \\fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
-        //     \\culpa qui officia deserunt mollit anim id est laborum.
-        //     \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
-        //     ,
-        // },
-        // // modify lines
-        // .{
-        //     \\foo
-        //     \\bar
-        //     \\baz
-        //     ,
-        //     \\foo
-        //     \\barrr
-        //     \\baz
-        // },
-        // .{
-        //     \\foooo
-        //     \\bar
-        //     \\baz
-        //     ,
-        //     \\foo
-        //     \\bar
-        //     \\baz
-        // },
-        // .{
-        //     \\foo
-        //     \\bar
-        //     \\baz
-        //     ,
-        //     \\foo
-        //     \\bar
-        //     \\baz
-        // },
-        // .{
-        //     \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
-        //     \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
-        //     \\nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
-        //     \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
-        //     \\fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
-        //     \\culpa qui officia deserunt mollit anim id est laborum.
-        //     ,
-        //     \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor modified
-        //     \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
-        //     \\nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
-        //     \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
-        //     \\fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in also modified
-        //     \\culpa qui officia deserunt mollit anim id est laborum.
-        //     ,
-        // },
+        // remove line
+        .{
+            \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
+            \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
+            \\nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+            \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
+            \\fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
+            \\culpa qui officia deserunt mollit anim id est laborum.
+            ,
+            \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
+            \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
+            \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
+            \\fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
+            \\culpa qui officia deserunt mollit anim id est laborum.
+            ,
+        },
+        // add some line
+        .{
+            \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
+            \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
+            \\nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+            \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
+            \\fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
+            \\culpa qui officia deserunt mollit anim id est laborum.
+            ,
+            \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
+            \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
+            \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
+            \\nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+            \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
+            \\fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
+            \\culpa qui officia deserunt mollit anim id est laborum.
+            \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
+            ,
+        },
+        // modify lines
+        .{
+            \\foo
+            \\bar
+            \\baz
+            ,
+            \\foo
+            \\barrr
+            \\baz
+        },
+        .{
+            \\foooo
+            \\bar
+            \\baz
+            ,
+            \\foo
+            \\bar
+            \\baz
+        },
+        .{
+            \\foo
+            \\bar
+            \\baz
+            ,
+            \\foo
+            \\bar
+            \\baz
+        },
+        .{
+            \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
+            \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
+            \\nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+            \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
+            \\fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
+            \\culpa qui officia deserunt mollit anim id est laborum.
+            ,
+            \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor modified
+            \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
+            \\nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+            \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
+            \\fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in also modified
+            \\culpa qui officia deserunt mollit anim id est laborum.
+            ,
+        },
     }) |thing| {
         var actual = try split(u8, a, thing[0]);
         var expected = try split(u8, a, thing[1]);
@@ -600,9 +591,6 @@ test StrDiffer {
         }
         var d = try StrDiffer.diff(a, actual.items, expected.items);
         defer d.deinit();
-        for (d.items) |diff| {
-            std.debug.print("{}\n", .{diff});
-        }
     }
 }
 
@@ -629,3 +617,13 @@ pub fn split(
 
     return lines;
 }
+
+const builtin = @import("builtin");
+
+const std = @import("std");
+const t = std.testing;
+const assert = std.debug.assert;
+const stackFallback = std.heap.stackFallback;
+
+const mem = std.mem;
+const Allocator = mem.Allocator;

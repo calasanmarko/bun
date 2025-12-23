@@ -1,13 +1,7 @@
-const std = @import("std");
-const Allocator = std.mem.Allocator;
-const bun = @import("root").bun;
 pub const css = @import("../css_parser.zig");
 const Result = css.Result;
-const ArrayList = std.ArrayListUnmanaged;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
-const CSSNumber = css.css_values.number.CSSNumber;
-const CSSNumberFns = css.css_values.number.CSSNumberFns;
 const Url = css.css_values.url.Url;
 const Gradient = css.css_values.gradient.Gradient;
 const Resolution = css.css_values.resolution.Resolution;
@@ -25,8 +19,8 @@ pub const Image = union(enum) {
     /// An `image-set()`.
     image_set: ImageSet,
 
-    pub usingnamespace css.DeriveParse(@This());
-    pub usingnamespace css.DeriveToCss(@This());
+    pub const parse = css.DeriveParse(@This()).parse;
+    pub const toCss = css.DeriveToCss(@This()).toCss;
 
     pub fn deinit(_: *@This(), _: std.mem.Allocator) void {
         // TODO: implement this
@@ -68,7 +62,7 @@ pub const Image = union(enum) {
 
     pub fn hasVendorPrefix(this: *const @This()) bool {
         const prefix = this.getVendorPrefix();
-        return !prefix.isEmpty() and !prefix.eq(VendorPrefix{ .none = true });
+        return !prefix.isEmpty() and prefix != VendorPrefix{ .none = true };
     }
 
     /// Returns the vendor prefix used in the image value.
@@ -76,7 +70,7 @@ pub const Image = union(enum) {
         return switch (this.*) {
             .gradient => |a| a.getVendorPrefix(),
             .image_set => |a| a.getVendorPrefix(),
-            else => VendorPrefix.empty(),
+            else => .{},
         };
     }
 
@@ -120,7 +114,7 @@ pub const Image = union(enum) {
         var res = css.SmallList(Image, 6){};
 
         // Get RGB fallbacks if needed.
-        const rgb = if (fallbacks.contains(ColorFallbackKind.RGB))
+        const rgb = if (fallbacks.rgb)
             this.getFallback(allocator, ColorFallbackKind.RGB)
         else
             null;
@@ -129,9 +123,9 @@ pub const Image = union(enum) {
         const prefix_image = if (rgb) |r| &r else this;
 
         // Legacy -webkit-gradient()
-        if (prefixes.contains(VendorPrefix.WEBKIT) and
+        if (prefixes.webkit and
             if (targets.browsers) |browsers| css.prefixes.Feature.isWebkitGradient(browsers) else false and
-            prefix_image.* == .gradient)
+                prefix_image.* == .gradient)
         {
             if (prefix_image.getLegacyWebkit(allocator)) |legacy| {
                 res.append(allocator, legacy);
@@ -139,31 +133,31 @@ pub const Image = union(enum) {
         }
 
         // Standard syntax, with prefixes.
-        if (prefixes.contains(VendorPrefix.WEBKIT)) {
+        if (prefixes.webkit) {
             res.append(allocator, prefix_image.getPrefixed(allocator, css.VendorPrefix.WEBKIT));
         }
 
-        if (prefixes.contains(VendorPrefix.MOZ)) {
+        if (prefixes.moz) {
             res.append(allocator, prefix_image.getPrefixed(allocator, css.VendorPrefix.MOZ));
         }
 
-        if (prefixes.contains(VendorPrefix.O)) {
+        if (prefixes.o) {
             res.append(allocator, prefix_image.getPrefixed(allocator, css.VendorPrefix.O));
         }
 
-        if (prefixes.contains(VendorPrefix.NONE)) {
+        if (prefixes.none) {
             // Unprefixed, rgb fallback.
             if (rgb) |r| {
                 res.append(allocator, r);
             }
 
             // P3 fallback.
-            if (fallbacks.contains(ColorFallbackKind.P3)) {
+            if (fallbacks.p3) {
                 res.append(allocator, this.getFallback(allocator, ColorFallbackKind.P3));
             }
 
             // Convert original to lab if needed (e.g. if oklab is not supported but lab is).
-            if (fallbacks.contains(ColorFallbackKind.LAB)) {
+            if (fallbacks.lab) {
                 this.* = this.getFallback(allocator, ColorFallbackKind.LAB);
             }
         } else if (res.pop()) |last| {
@@ -186,7 +180,7 @@ pub const Image = union(enum) {
     pub fn getNecessaryFallbacks(this: *const @This(), targets: css.targets.Targets) css.ColorFallbackKind {
         return switch (this.*) {
             .gradient => |grad| grad.getNecessaryFallbacks(targets),
-            else => css.ColorFallbackKind.empty(),
+            else => css.ColorFallbackKind{},
         };
     }
 
@@ -195,7 +189,7 @@ pub const Image = union(enum) {
     //     @panic(css.todo_stuff.depth);
     // }
 
-    // pub fn toCss(this: *const Image, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    // pub fn toCss(this: *const Image, dest: *css.Printer) css.PrintErr!void {
     //     _ = this; // autofix
     //     _ = dest; // autofix
     //     @panic(css.todo_stuff.depth);
@@ -245,8 +239,8 @@ pub const ImageSet = struct {
         } };
     }
 
-    pub fn toCss(this: *const ImageSet, comptime W: type, dest: *css.Printer(W)) PrintErr!void {
-        try this.vendor_prefix.toCss(W, dest);
+    pub fn toCss(this: *const ImageSet, dest: *css.Printer) PrintErr!void {
+        try this.vendor_prefix.toCss(dest);
         try dest.writeStr("image-set(");
         var first = true;
         for (this.options.items) |*option| {
@@ -255,17 +249,16 @@ pub const ImageSet = struct {
             } else {
                 try dest.delim(',', false);
             }
-            try option.toCss(W, dest, this.vendor_prefix.neq(VendorPrefix{ .none = true }));
+            try option.toCss(dest, this.vendor_prefix != VendorPrefix{ .none = true });
         }
         return dest.writeChar(')');
     }
 
     pub fn isCompatible(this: *const @This(), browsers: css.targets.Browsers) bool {
         return css.Feature.isCompatible(.image_set, browsers) and
-            for (this.options.items) |opt|
-        {
-            if (!opt.image.isCompatible(browsers)) break false;
-        } else true;
+            for (this.options.items) |opt| {
+                if (!opt.image.isCompatible(browsers)) break false;
+            } else true;
     }
 
     /// Returns the `image-set()` value with the given vendor prefix.
@@ -307,9 +300,10 @@ pub const ImageSetOption = struct {
         const start_position = input.input.tokenizer.getPosition();
         const loc = input.currentSourceLocation();
         const image = if (input.tryParse(css.Parser.expectUrlOrString, .{}).asValue()) |url| brk: {
-            const record_idx = switch (input.addImportRecordForUrl(
+            const record_idx = switch (input.addImportRecord(
                 url,
                 start_position,
+                .url,
             )) {
                 .result => |idx| idx,
                 .err => |e| return .{ .err = e },
@@ -341,8 +335,7 @@ pub const ImageSetOption = struct {
 
     pub fn toCss(
         this: *const ImageSetOption,
-        comptime W: type,
-        dest: *css.Printer(W),
+        dest: *css.Printer,
         is_prefixed: bool,
     ) PrintErr!void {
         if (this.image == .url and !is_prefixed) {
@@ -357,13 +350,13 @@ pub const ImageSetOption = struct {
                     dependencies.append(
                         dest.allocator,
                         .{ .url = dep },
-                    ) catch bun.outOfMemory();
+                    ) catch |err| bun.handleOom(err);
                 }
             } else {
                 css.serializer.serializeString(try dest.getImportRecordUrl(this.image.url.import_record_idx), dest) catch return dest.addFmtError();
             }
         } else {
-            try this.image.toCss(W, dest);
+            try this.image.toCss(dest);
         }
 
         // TODO: Throwing an error when `self.resolution = Resolution::Dppx(0.0)`
@@ -379,7 +372,7 @@ pub const ImageSetOption = struct {
             dest.targets = .{};
             break :targets targets;
         };
-        try this.resolution.toCss(W, dest);
+        try this.resolution.toCss(dest);
         dest.targets = targets;
 
         if (this.file_type) |file_type| {
@@ -407,3 +400,9 @@ fn parseFileType(input: *css.Parser) Result([]const u8) {
     };
     return input.parseNestedBlock([]const u8, {}, Fn.parseNestedBlockFn);
 }
+
+const bun = @import("bun");
+
+const std = @import("std");
+const ArrayList = std.ArrayListUnmanaged;
+const Allocator = std.mem.Allocator;

@@ -34,7 +34,7 @@ export class DataViewReader {
   }
 
   stringWithLength(byteLength: number) {
-    const str = td.decode(this.view.buffer.slice(this.cursor, this.cursor + byteLength));
+    const str = td.decode(this.view.buffer.slice(this.cursor, this.cursor + byteLength) as ArrayBuffer);
     this.cursor += byteLength;
     return str;
   }

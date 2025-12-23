@@ -1,7 +1,15 @@
-import { spawn, write, file } from "bun";
-import { expect, it, beforeAll, afterAll } from "bun:test";
-import { access, copyFile, open, writeFile, exists, cp, rm } from "fs/promises";
-import { bunExe, bunEnv as env, isWindows, VerdaccioRegistry, runBunInstall, toBeValidBin } from "harness";
+import { file, spawn, write } from "bun";
+import { afterAll, beforeAll, expect, it } from "bun:test";
+import { access, copyFile, cp, exists, open, rm, writeFile } from "fs/promises";
+import {
+  bunExe,
+  bunEnv as env,
+  isWindows,
+  readdirSorted,
+  runBunInstall,
+  toBeValidBin,
+  VerdaccioRegistry,
+} from "harness";
 import { join } from "path";
 
 expect.extend({
@@ -126,7 +134,7 @@ it("should be the default save format", async () => {
 });
 
 it("should save the lockfile if --save-text-lockfile and --frozen-lockfile are used", async () => {
-  const { packageDir, packageJson } = await registry.createTestDir({ saveTextLockfile: false });
+  const { packageDir, packageJson } = await registry.createTestDir({ bunfigOpts: { saveTextLockfile: false } });
   await Promise.all([
     write(packageJson, JSON.stringify({ name: "test-pkg", version: "1.0.0", dependencies: { "no-deps": "1.0.0" } })),
   ]);
@@ -161,7 +169,7 @@ it("should save the lockfile if --save-text-lockfile and --frozen-lockfile are u
 });
 
 it("should convert a binary lockfile with invalid optional peers", async () => {
-  const { packageDir, packageJson } = await registry.createTestDir({ npm: true });
+  const { packageDir, packageJson } = await registry.createTestDir({ bunfigOpts: { npm: true } });
   await Promise.all([
     write(
       packageJson,
@@ -183,7 +191,7 @@ it("should convert a binary lockfile with invalid optional peers", async () => {
     stderr: "pipe",
   });
 
-  let [out, err] = await Promise.all([Bun.readableStreamToText(stdout), Bun.readableStreamToText(stderr)]);
+  let [out, err] = await Promise.all([stdout.text(), stderr.text()]);
   expect(err).toContain("Saved lockfile");
   expect(out).toContain("Saved bun.lock (69 packages)");
 
@@ -206,7 +214,7 @@ it("should convert a binary lockfile with invalid optional peers", async () => {
     stderr: "pipe",
   }));
 
-  [out, err] = await Promise.all([Bun.readableStreamToText(stdout), Bun.readableStreamToText(stderr)]);
+  [out, err] = await Promise.all([stdout.text(), stderr.text()]);
   expect(err).toContain("Saved lockfile");
   expect(out).toContain("Saved bun.lock (69 packages)");
 
@@ -241,17 +249,12 @@ it("should not deduplicate bundled packages with un-bundled packages", async () 
   expect(await exited).toBe(0);
 
   async function checkModules() {
-    const res = await Promise.all([
-      exists(join(packageDir, "node_modules/debug-1")),
-      exists(join(packageDir, "node_modules/npm-1")),
-      exists(join(packageDir, "node_modules/ms-1")),
-    ]);
-    expect(res).toEqual([true, true, true]);
+    expect(await readdirSorted(join(packageDir, "node_modules"))).toEqual(["debug-1", "ms-1", "npm-1"]);
   }
 
   await checkModules();
 
-  const out1 = (await Bun.readableStreamToText(stdout))
+  const out1 = (await stdout.text())
     .replaceAll(/\s*\[[0-9\.]+m?s\]\s*$/g, "")
     .split(/\r?\n/)
     .slice(1);
@@ -271,11 +274,61 @@ it("should not deduplicate bundled packages with un-bundled packages", async () 
   expect(await exited).toBe(0);
 
   await checkModules();
-  const out2 = (await Bun.readableStreamToText(stdout))
+  const out2 = (await stdout.text())
     .replaceAll(/\s*\[[0-9\.]+m?s\]\s*$/g, "")
     .split(/\r?\n/)
     .slice(1);
   expect(out2).toEqual(out1);
+
+  // force saving a lockfile does not increase the number of packages
+  ({ exited, stdout } = spawn({
+    cmd: [bunExe(), "install", "--lockfile-only"],
+    cwd: packageDir,
+    env,
+    stdout: "pipe",
+    stderr: "inherit",
+  }));
+
+  expect(await exited).toBe(0);
+
+  await checkModules();
+  const out3 = (await stdout.text())
+    .replaceAll(/\s*\[[0-9\.]+m?s\]\s*$/g, "")
+    .split(/\r?\n/)
+    .slice(1);
+
+  ({ exited, stdout } = spawn({
+    cmd: [bunExe(), "install", "--lockfile-only"],
+    cwd: packageDir,
+    env,
+    stdout: "pipe",
+    stderr: "inherit",
+  }));
+
+  expect(await exited).toBe(0);
+  await checkModules();
+
+  const out4 = (await stdout.text())
+    .replaceAll(/\s*\[[0-9\.]+m?s\]\s*$/g, "")
+    .split(/\r?\n/)
+    .slice(1);
+  expect(out4).toEqual(out3);
+
+  expect(out4).toMatchSnapshot();
+
+  await rm(join(packageDir, "node_modules"), { recursive: true, force: true });
+
+  // --frozen-lockfile is successful
+  ({ exited, stdout } = spawn({
+    cmd: [bunExe(), "install", "--frozen-lockfile"],
+    cwd: packageDir,
+    env,
+    stdout: "pipe",
+    stderr: "inherit",
+  }));
+
+  expect(await exited).toBe(0);
+  await checkModules();
 });
 
 it("should not change formatting unexpectedly", async () => {
@@ -415,11 +468,21 @@ index d156130662798530e852e1afaec5b1c03d429cdc..b4ddf35975a952fdaed99f2b14236519
   });
 
   expect(await exited).toBe(0);
-  const out1 = (await Bun.readableStreamToText(stdout))
+  const out1 = (await stdout.text())
     .replaceAll(/\s*\[[0-9\.]+m?s\]\s*$/g, "")
     .split(/\r?\n/)
     .slice(1);
-  expect(out1).toMatchSnapshot();
+  expect(out1).toMatchInlineSnapshot(`
+    [
+      "preinstall",
+      "",
+      "+ optional-peer-deps@1.0.0 (v1.0.1 available)",
+      "+ optional-native@1.0.0",
+      "+ uses-what-bin@1.0.0 (v1.5.0 available)",
+      "",
+      "13 packages installed",
+    ]
+  `);
 
   await checkInstall();
 
@@ -437,15 +500,118 @@ index d156130662798530e852e1afaec5b1c03d429cdc..b4ddf35975a952fdaed99f2b14236519
   }));
 
   expect(await exited).toBe(0);
-  const out2 = (await Bun.readableStreamToText(stdout))
+  const out2 = (await stdout.text())
     .replaceAll(/\s*\[[0-9\.]+m?s\]\s*$/g, "")
     .split(/\r?\n/)
     .slice(1);
-  expect(out2).toMatchSnapshot();
+  expect(out2).toMatchInlineSnapshot(`
+    [
+      "preinstall",
+      "",
+      "+ bundled-1@1.0.0",
+      "",
+      "13 packages installed",
+    ]
+  `);
 
   await checkInstall();
 
   expect((await file(join(packageDir, "bun.lock")).text()).replaceAll(/localhost:\d+/g, "localhost:1234")).toBe(
     lockfile,
   );
+});
+
+it("should sort overrides before comparing", async () => {
+  const { packageDir, packageJson } = await registry.createTestDir();
+
+  const pkg = {
+    name: "pkg-with-overrides",
+    dependencies: {
+      "one-dep": "1.0.0",
+      "uses-what-bin": "1.5.0",
+    },
+    peerDependencies: {
+      "what-bin": "1.0.0",
+      "no-deps": "2.0.0",
+    },
+    peerDependenciesMeta: {
+      "what-bin": {
+        optional: true,
+      },
+      "no-deps": {
+        optional: true,
+      },
+    },
+    resolutions: {
+      "what-bin": "1.0.0",
+      "no-deps": "2.0.0",
+    },
+  };
+
+  await write(packageJson, JSON.stringify(pkg));
+
+  await runBunInstall(env, packageDir);
+
+  const lockfile = (await file(join(packageDir, "bun.lock")).text()).replaceAll(/localhost:\d+/g, "localhost:1234");
+  expect(lockfile).toMatchSnapshot();
+  await runBunInstall(env, packageDir, { frozenLockfile: true });
+
+  // now swap "what-bin" and "no-deps" in resolutions
+  pkg.resolutions = {
+    "no-deps": "2.0.0",
+    "what-bin": "1.0.0",
+  };
+  await write(packageJson, JSON.stringify(pkg));
+
+  await runBunInstall(env, packageDir, { frozenLockfile: true });
+
+  // --frozen-lockfile was a success. lockfile will be the same as the first
+  const secondLockfile = (await file(join(packageDir, "bun.lock")).text()).replaceAll(
+    /localhost:\d+/g,
+    "localhost:1234",
+  );
+  expect(secondLockfile).toBe(lockfile);
+});
+
+it("should include unused resolutions in the lockfile", async () => {
+  const { packageDir, packageJson } = await registry.createTestDir();
+
+  // we need to include unused resolutions in order to detect changes from package.json
+
+  const pkg = {
+    name: "pkg-with-unused-override",
+    dependencies: {
+      "one-dep": "1.0.0",
+      "uses-what-bin": "1.5.0",
+    },
+    peerDependencies: {
+      "what-bin": "1.0.0",
+      "no-deps": "2.0.0",
+    },
+    peerDependenciesMeta: {
+      "what-bin": {
+        optional: true,
+      },
+      "no-deps": {
+        optional: true,
+      },
+    },
+    resolutions: {
+      "what-bin": "1.0.0",
+      "no-deps": "2.0.0",
+
+      // unused resolution
+      "jquery": "4.0.0",
+    },
+  };
+
+  await write(packageJson, JSON.stringify(pkg));
+
+  await runBunInstall(env, packageDir);
+
+  const lockfile = (await file(join(packageDir, "bun.lock")).text()).replaceAll(/localhost:\d+/g, "localhost:1234");
+  expect(lockfile).toMatchSnapshot();
+
+  // --frozen-lockfile works
+  await runBunInstall(env, packageDir, { frozenLockfile: true });
 });

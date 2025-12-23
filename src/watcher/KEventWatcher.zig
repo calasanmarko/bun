@@ -1,28 +1,23 @@
 const KEventWatcher = @This();
-const log = Output.scoped(.watcher, false);
+
 pub const EventListIndex = u32;
 
-const KEvent = std.c.Kevent;
-
-// Internal
-changelist: [128]KEvent = undefined,
-
 // Everything being watched
-eventlist: [max_eviction_count]KEvent = undefined,
 eventlist_index: EventListIndex = 0,
 
-fd: bun.FileDescriptor = bun.invalid_fd,
+fd: bun.FD.Optional = .none,
+
+const changelist_count = 128;
 
 pub fn init(this: *KEventWatcher, _: []const u8) !void {
     const fd = try std.posix.kqueue();
     if (fd == 0) return error.KQueueError;
-    this.fd = bun.toFD(fd);
+    this.fd = .init(.fromNative(fd));
 }
 
 pub fn stop(this: *KEventWatcher) void {
-    if (this.fd.isValid()) {
-        _ = bun.sys.close(this.fd);
-        this.fd = bun.invalid_fd;
+    if (this.fd.take()) |fd| {
+        fd.close();
     }
 }
 
@@ -38,21 +33,23 @@ pub fn watchEventFromKEvent(kevent: KEvent) Watcher.Event {
     };
 }
 
-pub fn watchLoopCycle(this: *Watcher) bun.JSC.Maybe(void) {
-    bun.assert(this.platform.fd.isValid());
+pub fn watchLoopCycle(this: *Watcher) bun.sys.Maybe(void) {
+    const fd: bun.FD = this.platform.fd.unwrap() orelse
+        @panic("KEventWatcher has an invalid file descriptor");
 
     // not initialized each time
-    var changelist_array: [128]KEvent = std.mem.zeroes([128]KEvent);
+    var changelist_array: [changelist_count]KEvent = undefined;
+    @memset(&changelist_array, std.mem.zeroes(KEvent));
     var changelist = &changelist_array;
 
     defer Output.flush();
 
     var count = std.posix.system.kevent(
-        this.platform.fd.cast(),
+        fd.native(),
         changelist,
         0,
         changelist,
-        128,
+        changelist_count,
         null, // timeout
     );
 
@@ -60,7 +57,7 @@ pub fn watchLoopCycle(this: *Watcher) bun.JSC.Maybe(void) {
     if (count < 128 / 2) {
         const remain = 128 - count;
         const extra = std.posix.system.kevent(
-            this.platform.fd.cast(),
+            fd.native(),
             changelist[@intCast(count)..].ptr,
             0,
             changelist[@intCast(count)..].ptr,
@@ -96,14 +93,16 @@ pub fn watchLoopCycle(this: *Watcher) bun.JSC.Maybe(void) {
     this.mutex.lock();
     defer this.mutex.unlock();
     if (this.running) {
+        this.writeTraceEvents(watchevents, this.changed_filepaths[0..watchevents.len]);
         this.onFileUpdate(this.ctx, watchevents, this.changed_filepaths[0..watchevents.len], this.watchlist);
     }
 
-    return .{ .result = {} };
+    return .success;
 }
 
 const std = @import("std");
-const bun = @import("root").bun;
+const KEvent = std.c.Kevent;
+
+const bun = @import("bun");
 const Output = bun.Output;
 const Watcher = bun.Watcher;
-const max_eviction_count = Watcher.max_eviction_count;

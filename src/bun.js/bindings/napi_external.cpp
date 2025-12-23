@@ -5,11 +5,8 @@ namespace Bun {
 
 NapiExternal::~NapiExternal()
 {
-    if (finalizer) {
-        // We cannot call globalObject() here because it is in a finalizer.
-        // https://github.com/oven-sh/bun/issues/13001#issuecomment-2290022312
-        reinterpret_cast<napi_finalize>(finalizer)(toNapi(this->napi_env), m_value, m_finalizerHint);
-    }
+    auto* env = m_env.get();
+    m_finalizer.call(env, m_value, env && !env->mustDeferFinalizers());
 }
 
 void NapiExternal::destroy(JSC::JSCell* cell)
@@ -17,6 +14,6 @@ void NapiExternal::destroy(JSC::JSCell* cell)
     static_cast<NapiExternal*>(cell)->~NapiExternal();
 }
 
-const ClassInfo NapiExternal::s_info = { "External"_s, &Base::s_info, nullptr, nullptr, CREATE_METHOD_TABLE(NapiExternal) };
+const ClassInfo NapiExternal::s_info = { "NapiExternal"_s, &Base::s_info, nullptr, nullptr, CREATE_METHOD_TABLE(NapiExternal) };
 
 }

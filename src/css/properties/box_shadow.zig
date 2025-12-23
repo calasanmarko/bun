@@ -1,31 +1,14 @@
-const std = @import("std");
-const bun = @import("root").bun;
-const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayListUnmanaged;
-
 pub const css = @import("../css_parser.zig");
 
 const SmallList = css.SmallList;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
 
-const LengthPercentage = css.css_values.length.LengthPercentage;
-const CustomIdent = css.css_values.ident.CustomIdent;
-const CSSString = css.css_values.string.CSSString;
-const CSSNumber = css.css_values.number.CSSNumber;
-const LengthPercentageOrAuto = css.css_values.length.LengthPercentageOrAuto;
-const Size2D = css.css_values.size.Size2D;
-const DashedIdent = css.css_values.ident.DashedIdent;
-const Image = css.css_values.image.Image;
 const CssColor = css.css_values.color.CssColor;
-const Ratio = css.css_values.ratio.Ratio;
 const Length = css.css_values.length.Length;
-const Rect = css.css_values.rect.Rect;
-const NumberOrPercentage = css.css_values.percentage.NumberOrPercentage;
 
 const VendorPrefix = css.VendorPrefix;
 const Property = css.Property;
-const PropertyId = css.PropertyId;
 const Feature = css.prefixes.Feature;
 
 /// A value for the [box-shadow](https://drafts.csswg.org/css-backgrounds/#box-shadow) property.
@@ -101,28 +84,28 @@ pub const BoxShadow = struct {
         } };
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *css.Printer) css.PrintErr!void {
         if (this.inset) {
             try dest.writeStr("inset ");
         }
 
-        try this.x_offset.toCss(W, dest);
+        try this.x_offset.toCss(dest);
         try dest.writeChar(' ');
-        try this.y_offset.toCss(W, dest);
+        try this.y_offset.toCss(dest);
 
         if (!this.blur.eql(&Length.zero()) or !this.spread.eql(&Length.zero())) {
             try dest.writeChar(' ');
-            try this.blur.toCss(W, dest);
+            try this.blur.toCss(dest);
 
             if (!this.spread.eql(&Length.zero())) {
                 try dest.writeChar(' ');
-                try this.spread.toCss(W, dest);
+                try this.spread.toCss(dest);
             }
         }
 
         if (!this.color.eql(&CssColor{ .current_color = {} })) {
             try dest.writeChar(' ');
-            try this.color.toCss(W, dest);
+            try this.color.toCss(dest);
         }
     }
 
@@ -159,7 +142,7 @@ pub const BoxShadowHandler = struct {
                 if (this.box_shadows) |*bxs| {
                     const val: *SmallList(BoxShadow, 1) = &bxs.*[0];
                     const prefixes: *VendorPrefix = &bxs.*[1];
-                    if (!val.eql(box_shadows) and !prefixes.contains(prefix)) {
+                    if (!val.eql(box_shadows) and !bun.bits.contains(VendorPrefix, prefixes.*, prefix)) {
                         this.flush(dest, context);
                         this.box_shadows = .{
                             box_shadows.deepClone(context.allocator),
@@ -167,7 +150,7 @@ pub const BoxShadowHandler = struct {
                         };
                     } else {
                         val.* = box_shadows.deepClone(context.allocator);
-                        prefixes.insert(prefix);
+                        bun.bits.insert(VendorPrefix, prefixes, prefix);
                     }
                 } else {
                     this.box_shadows = .{
@@ -182,7 +165,7 @@ pub const BoxShadowHandler = struct {
 
                     var unparsed = unp.deepClone(context.allocator);
                     context.addUnparsedFallbacks(&unparsed);
-                    dest.append(context.allocator, .{ .unparsed = unparsed }) catch bun.outOfMemory();
+                    bun.handleOom(dest.append(context.allocator, .{ .unparsed = unparsed }));
                     this.flushed = true;
                 } else return false;
             },
@@ -208,12 +191,12 @@ pub const BoxShadowHandler = struct {
         if (!this.flushed) {
             const ColorFallbackKind = css.ColorFallbackKind;
             var prefixes = context.targets.prefixes(prefixes2, Feature.box_shadow);
-            var fallbacks = ColorFallbackKind.empty();
+            var fallbacks = ColorFallbackKind{};
             for (box_shadows.slice()) |*shadow| {
-                fallbacks.insert(shadow.color.getNecessaryFallbacks(context.targets));
+                bun.bits.insert(ColorFallbackKind, &fallbacks, shadow.color.getNecessaryFallbacks(context.targets));
             }
 
-            if (fallbacks.contains(ColorFallbackKind{ .rgb = true })) {
+            if (fallbacks.rgb) {
                 var rgb = SmallList(BoxShadow, 1).initCapacity(context.allocator, box_shadows.len());
                 rgb.setLen(box_shadows.len());
                 for (box_shadows.slice(), rgb.slice_mut()) |*input, *output| {
@@ -225,8 +208,8 @@ pub const BoxShadowHandler = struct {
                     }
                 }
 
-                dest.append(context.allocator, .{ .@"box-shadow" = .{ rgb, prefixes } }) catch bun.outOfMemory();
-                if (prefixes.contains(VendorPrefix.NONE)) {
+                bun.handleOom(dest.append(context.allocator, .{ .@"box-shadow" = .{ rgb, prefixes } }));
+                if (prefixes.none) {
                     prefixes = VendorPrefix.NONE;
                 } else {
                     // Only output RGB for prefixed property (e.g. -webkit-box-shadow)
@@ -234,7 +217,7 @@ pub const BoxShadowHandler = struct {
                 }
             }
 
-            if (fallbacks.contains(ColorFallbackKind.P3)) {
+            if (fallbacks.p3) {
                 var p3 = SmallList(BoxShadow, 1).initCapacity(context.allocator, box_shadows.len());
                 p3.setLen(box_shadows.len());
                 for (box_shadows.slice(), p3.slice_mut()) |*input, *output| {
@@ -245,10 +228,10 @@ pub const BoxShadowHandler = struct {
                         @field(output, field.name) = css.generic.deepClone(field.type, &@field(input, field.name), context.allocator);
                     }
                 }
-                dest.append(context.allocator, .{ .@"box-shadow" = .{ p3, VendorPrefix.NONE } }) catch bun.outOfMemory();
+                bun.handleOom(dest.append(context.allocator, .{ .@"box-shadow" = .{ p3, VendorPrefix.NONE } }));
             }
 
-            if (fallbacks.contains(ColorFallbackKind.LAB)) {
+            if (fallbacks.lab) {
                 var lab = SmallList(BoxShadow, 1).initCapacity(context.allocator, box_shadows.len());
                 lab.setLen(box_shadows.len());
                 for (box_shadows.slice(), lab.slice_mut()) |*input, *output| {
@@ -259,14 +242,18 @@ pub const BoxShadowHandler = struct {
                         @field(output, field.name) = css.generic.deepClone(field.type, &@field(input, field.name), context.allocator);
                     }
                 }
-                dest.append(context.allocator, .{ .@"box-shadow" = .{ lab, VendorPrefix.NONE } }) catch bun.outOfMemory();
+                bun.handleOom(dest.append(context.allocator, .{ .@"box-shadow" = .{ lab, VendorPrefix.NONE } }));
             } else {
-                dest.append(context.allocator, .{ .@"box-shadow" = .{ box_shadows, prefixes } }) catch bun.outOfMemory();
+                bun.handleOom(dest.append(context.allocator, .{ .@"box-shadow" = .{ box_shadows, prefixes } }));
             }
         } else {
-            dest.append(context.allocator, .{ .@"box-shadow" = .{ box_shadows, prefixes2 } }) catch bun.outOfMemory();
+            bun.handleOom(dest.append(context.allocator, .{ .@"box-shadow" = .{ box_shadows, prefixes2 } }));
         }
 
         this.flushed = true;
     }
 };
+
+const bun = @import("bun");
+const std = @import("std");
+const Allocator = std.mem.Allocator;

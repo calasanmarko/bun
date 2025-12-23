@@ -1,29 +1,12 @@
-const std = @import("std");
-const bun = @import("root").bun;
-const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayListUnmanaged;
-
 pub const css = @import("../css_parser.zig");
 
-const SmallList = css.SmallList;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
 
 const LengthPercentage = css.css_values.length.LengthPercentage;
-const CustomIdent = css.css_values.ident.CustomIdent;
-const CSSString = css.css_values.string.CSSString;
-const CSSNumber = css.css_values.number.CSSNumber;
-const LengthPercentageOrAuto = css.css_values.length.LengthPercentageOrAuto;
 const Size2D = css.css_values.size.Size2D;
-const DashedIdent = css.css_values.ident.DashedIdent;
-const Image = css.css_values.image.Image;
-const CssColor = css.css_values.color.CssColor;
-const Ratio = css.css_values.ratio.Ratio;
-const Length = css.css_values.length.LengthValue;
 const Rect = css.css_values.rect.Rect;
-const NumberOrPercentage = css.css_values.percentage.NumberOrPercentage;
 const Property = css.Property;
-const PropertyId = css.PropertyId;
 const VendorPrefix = css.VendorPrefix;
 const PropertyIdTag = css.PropertyIdTag;
 
@@ -38,7 +21,7 @@ pub const BorderRadius = struct {
     /// The x and y radius values for the bottom left corner.
     bottom_left: Size2D(LengthPercentage),
 
-    pub usingnamespace css.DefineShorthand(@This(), css.PropertyIdTag.@"border-radius", PropertyFieldMap);
+    // (old using name space) css.DefineShorthand(@This(), css.PropertyIdTag.@"border-radius", PropertyFieldMap);
 
     pub const PropertyFieldMap = .{
         .top_left = "border-top-left-radius",
@@ -80,7 +63,7 @@ pub const BorderRadius = struct {
         };
     }
 
-    pub fn toCss(this: *const BorderRadius, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const BorderRadius, dest: *Printer) PrintErr!void {
         const widths = Rect(*const LengthPercentage){
             .top = &this.top_left.a,
             .right = &this.top_right.a,
@@ -95,11 +78,11 @@ pub const BorderRadius = struct {
             .left = &this.bottom_left.b,
         };
 
-        try widths.toCss(W, dest);
+        try widths.toCss(dest);
 
         if (!widths.eql(&heights)) {
             try dest.delim('/', true);
-            try heights.toCss(W, dest);
+            try heights.toCss(dest);
         }
     }
 
@@ -161,7 +144,7 @@ pub const BorderRadiusHandler = struct {
                         .@"border-end-start-radius" => logicalPropertyHelper(this, dest, context, "end_start", property),
                         else => {
                             this.flush(dest, context);
-                            dest.append(context.allocator, Property{ .unparsed = unparsed.getPrefixed(context.allocator, context.targets, css.prefixes.Feature.border_radius) }) catch bun.outOfMemory();
+                            bun.handleOom(dest.append(context.allocator, Property{ .unparsed = unparsed.getPrefixed(context.allocator, context.targets, css.prefixes.Feature.border_radius) }));
                         },
                     }
                 } else return false;
@@ -202,11 +185,11 @@ pub const BorderRadiusHandler = struct {
                         .bottom_left = bottom_left.?[0].deepClone(context.allocator),
                     },
                     prefix,
-                } }) catch bun.outOfMemory();
-                top_left.?[1].remove(intersection);
-                top_right.?[1].remove(intersection);
-                bottom_right.?[1].remove(intersection);
-                bottom_left.?[1].remove(intersection);
+                } }) catch |err| bun.handleOom(err);
+                bun.bits.remove(VendorPrefix, &top_left.?[1], intersection);
+                bun.bits.remove(VendorPrefix, &top_right.?[1], intersection);
+                bun.bits.remove(VendorPrefix, &bottom_right.?[1], intersection);
+                bun.bits.remove(VendorPrefix, &bottom_left.?[1], intersection);
             }
         }
 
@@ -227,7 +210,7 @@ pub const BorderRadiusHandler = struct {
         if (val) |v| {
             if (!v[1].isEmpty()) {
                 const prefix = ctx.targets.prefixes(v[1], css.prefixes.Feature.border_radius);
-                d.append(ctx.allocator, @unionInit(css.Property, prop, .{ v[0], prefix })) catch bun.outOfMemory();
+                bun.handleOom(d.append(ctx.allocator, @unionInit(css.Property, prop, .{ v[0], prefix })));
             }
         }
     }
@@ -235,9 +218,9 @@ pub const BorderRadiusHandler = struct {
     fn logicalProperty(d: *css.DeclarationList, ctx: *css.PropertyHandlerContext, val: ?css.Property, comptime ltr: []const u8, comptime rtl: []const u8, logical_supported: bool) void {
         if (val) |v| {
             if (logical_supported) {
-                d.append(ctx.allocator, v) catch bun.outOfMemory();
+                bun.handleOom(d.append(ctx.allocator, v));
             } else {
-                const prefix = ctx.targets.prefixes(css.VendorPrefix.empty(), css.prefixes.Feature.border_radius);
+                const prefix = ctx.targets.prefixes(css.VendorPrefix{}, css.prefixes.Feature.border_radius);
                 switch (v) {
                     .@"border-start-start-radius",
                     .@"border-start-end-radius",
@@ -267,7 +250,7 @@ pub const BorderRadiusHandler = struct {
         // If two vendor prefixes for the same property have different
         // values, we need to flush what we have immediately to preserve order.
         if (@field(self, prop)) |*existing| {
-            if (!existing.*[0].eql(val) and !existing.*[1].contains(vp)) {
+            if (!existing.*[0].eql(val) and !bun.bits.contains(VendorPrefix, existing.*[1], vp)) {
                 self.flush(d, ctx);
             }
         }
@@ -332,3 +315,7 @@ pub fn isLogicalBorderRadiusProperty(property_id: PropertyIdTag) bool {
         else => false,
     };
 }
+
+const bun = @import("bun");
+const std = @import("std");
+const Allocator = std.mem.Allocator;

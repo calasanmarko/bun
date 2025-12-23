@@ -287,17 +287,20 @@ test("redirect with body", async () => {
   let count = 0;
   await using server = createServer(async (req, res) => {
     let body = "";
-    for await (const chunk of req) {
+    req.on("data", chunk => {
       body += chunk;
-    }
-    expect(body).toBe("asd");
-    if (count++ === 0) {
-      res.setHeader("location", "asd");
-      res.statusCode = 302;
-      res.end();
-    } else {
-      res.end(String(count));
-    }
+    });
+
+    req.on("end", () => {
+      expect(body).toBe("asd");
+      if (count++ === 0) {
+        res.setHeader("location", "asd");
+        res.statusCode = 302;
+        res.end();
+      } else {
+        res.end(String(count));
+      }
+    });
   }).listen(0);
   await once(server, "listening");
 
@@ -492,7 +495,7 @@ test("fetching with Request object - issue #1527", async () => {
       body,
     });
 
-    expect(fetch(request)).resolves.pass();
+    expect(await fetch(request)).resolves.pass();
   } finally {
     server.closeAllConnections();
   }

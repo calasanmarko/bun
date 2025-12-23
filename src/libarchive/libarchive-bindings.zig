@@ -1,16 +1,12 @@
-const std = @import("std");
-const bun = @import("root").bun;
 const wchar_t = u16;
+
+// Match libarchive's platform-specific type definitions
 const la_int64_t = i64;
 const la_ssize_t = isize;
+
 const struct_archive = opaque {};
 const struct_archive_entry = opaque {};
-const archive_entry = struct_archive_entry;
-const mode_t = bun.Mode;
-const FILE = @import("std").c.FILE;
 // const time_t = @import("std").c.time_t;
-const dev_t = @import("std").c.dev_t;
-const OOM = bun.OOM;
 
 pub const FileType = enum(mode_t) {
     regular = 0o100000,
@@ -184,8 +180,6 @@ pub const Flags = struct {
     };
 };
 
-const ARCHIVE_VERSION_ONLY_STRING = "3.5.3dev";
-const ARCHIVE_VERSION_STRING = "libarchive " ++ ARCHIVE_VERSION_ONLY_STRING;
 const ARCHIVE_EOF = @as(c_int, 1);
 const ARCHIVE_OK = @as(c_int, 0);
 const ARCHIVE_RETRY = -@as(c_int, 10);
@@ -252,11 +246,6 @@ const ARCHIVE_FORMAT_RAR = @import("std").zig.c_translation.promoteIntLiteral(c_
 const ARCHIVE_FORMAT_7ZIP = @import("std").zig.c_translation.promoteIntLiteral(c_int, 0xE0000, .hexadecimal);
 const ARCHIVE_FORMAT_WARC = @import("std").zig.c_translation.promoteIntLiteral(c_int, 0xF0000, .hexadecimal);
 const ARCHIVE_FORMAT_RAR_V5 = @import("std").zig.c_translation.promoteIntLiteral(c_int, 0x100000, .hexadecimal);
-const ARCHIVE_READ_FORMAT_CAPS_NONE = @as(c_int, 0);
-const ARCHIVE_READ_FORMAT_CAPS_ENCRYPT_DATA = @as(c_int, 1) << @as(c_int, 0);
-const ARCHIVE_READ_FORMAT_CAPS_ENCRYPT_METADATA = @as(c_int, 1) << @as(c_int, 1);
-const ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED = -@as(c_int, 2);
-const ARCHIVE_READ_FORMAT_ENCRYPTION_DONT_KNOW = -@as(c_int, 1);
 const ARCHIVE_EXTRACT_OWNER = @as(c_int, 0x0001);
 const ARCHIVE_EXTRACT_PERM = @as(c_int, 0x0002);
 const ARCHIVE_EXTRACT_TIME = @as(c_int, 0x0004);
@@ -276,18 +265,6 @@ const ARCHIVE_EXTRACT_HFS_COMPRESSION_FORCED = @import("std").zig.c_translation.
 const ARCHIVE_EXTRACT_SECURE_NOABSOLUTEPATHS = @import("std").zig.c_translation.promoteIntLiteral(c_int, 0x10000, .hexadecimal);
 const ARCHIVE_EXTRACT_CLEAR_NOCHANGE_FFLAGS = @import("std").zig.c_translation.promoteIntLiteral(c_int, 0x20000, .hexadecimal);
 const ARCHIVE_EXTRACT_SAFE_WRITES = @import("std").zig.c_translation.promoteIntLiteral(c_int, 0x40000, .hexadecimal);
-const ARCHIVE_READDISK_RESTORE_ATIME = @as(c_int, 0x0001);
-const ARCHIVE_READDISK_HONOR_NODUMP = @as(c_int, 0x0002);
-const ARCHIVE_READDISK_MAC_COPYFILE = @as(c_int, 0x0004);
-const ARCHIVE_READDISK_NO_TRAVERSE_MOUNTS = @as(c_int, 0x0008);
-const ARCHIVE_READDISK_NO_XATTR = @as(c_int, 0x0010);
-const ARCHIVE_READDISK_NO_ACL = @as(c_int, 0x0020);
-const ARCHIVE_READDISK_NO_FFLAGS = @as(c_int, 0x0040);
-const ARCHIVE_MATCH_MTIME = @as(c_int, 0x0100);
-const ARCHIVE_MATCH_CTIME = @as(c_int, 0x0200);
-const ARCHIVE_MATCH_NEWER = @as(c_int, 0x0001);
-const ARCHIVE_MATCH_OLDER = @as(c_int, 0x0002);
-const ARCHIVE_MATCH_EQUAL = @as(c_int, 0x0010);
 
 pub const Archive = opaque {
     pub const Result = enum(i32) {
@@ -956,7 +933,7 @@ pub const Archive = opaque {
                     .retry => continue,
                     .eof => Return.initRes(null),
                     .ok => {
-                        const kind = bun.C.kindFromMode(entry.filetype());
+                        const kind = bun.sys.kindFromMode(entry.filetype());
 
                         if (this.filter.contains(kind)) continue;
 
@@ -991,15 +968,15 @@ pub const Archive = opaque {
     };
 };
 
-pub const archive_read_callback = *const fn (*struct_archive, *anyopaque, [*c]*const anyopaque) callconv(.C) la_ssize_t;
-pub const archive_skip_callback = *const fn (*struct_archive, *anyopaque, la_int64_t) callconv(.C) la_int64_t;
-pub const archive_seek_callback = *const fn (*struct_archive, *anyopaque, la_int64_t, c_int) callconv(.C) la_int64_t;
-pub const archive_write_callback = *const fn (*struct_archive, *anyopaque, ?*const anyopaque, usize) callconv(.C) la_ssize_t;
-pub const archive_open_callback = *const fn (*struct_archive, *anyopaque) callconv(.C) c_int;
-pub const archive_close_callback = *const fn (*struct_archive, *anyopaque) callconv(.C) c_int;
-pub const archive_free_callback = *const fn (*struct_archive, *anyopaque) callconv(.C) c_int;
-pub const archive_switch_callback = *const fn (*struct_archive, *anyopaque, ?*anyopaque) callconv(.C) c_int;
-pub const archive_passphrase_callback = *const fn (*struct_archive, *anyopaque) callconv(.C) [*c]const u8;
+pub const archive_read_callback = *const fn (*struct_archive, *anyopaque, [*c]*const anyopaque) callconv(.c) la_ssize_t;
+pub const archive_skip_callback = *const fn (*struct_archive, *anyopaque, la_int64_t) callconv(.c) la_int64_t;
+pub const archive_seek_callback = *const fn (*struct_archive, *anyopaque, la_int64_t, c_int) callconv(.c) la_int64_t;
+pub const archive_write_callback = *const fn (*struct_archive, *anyopaque, ?*const anyopaque, usize) callconv(.c) la_ssize_t;
+pub const archive_open_callback = *const fn (*struct_archive, *anyopaque) callconv(.c) c_int;
+pub const archive_close_callback = *const fn (*struct_archive, *anyopaque) callconv(.c) c_int;
+pub const archive_free_callback = *const fn (*struct_archive, *anyopaque) callconv(.c) c_int;
+pub const archive_switch_callback = *const fn (*struct_archive, *anyopaque, ?*anyopaque) callconv(.c) c_int;
+pub const archive_passphrase_callback = *const fn (*struct_archive, *anyopaque) callconv(.c) [*c]const u8;
 pub extern fn archive_read_support_compression_program(*struct_archive, command: [*c]const u8) c_int;
 pub extern fn archive_read_support_compression_program_signature(*struct_archive, [*c]const u8, ?*const anyopaque, usize) c_int;
 pub extern fn archive_read_support_filter_program(*struct_archive, command: [*c]const u8) c_int;
@@ -1041,7 +1018,7 @@ pub extern fn archive_read_add_passphrase(*struct_archive, [*c]const u8) c_int;
 pub extern fn archive_read_set_passphrase_callback(*struct_archive, client_data: ?*anyopaque, ?archive_passphrase_callback) c_int;
 pub extern fn archive_read_extract(*struct_archive, *struct_archive_entry, flags: c_int) c_int;
 pub extern fn archive_read_extract2(*struct_archive, *struct_archive_entry, *struct_archive) c_int;
-pub extern fn archive_read_extract_set_progress_callback(*struct_archive, _progress_func: ?*const fn (?*anyopaque) callconv(.C) void, _user_data: ?*anyopaque) void;
+pub extern fn archive_read_extract_set_progress_callback(*struct_archive, _progress_func: ?*const fn (?*anyopaque) callconv(.c) void, _user_data: ?*anyopaque) void;
 pub extern fn archive_read_extract_set_skip_file(*struct_archive, la_int64_t, la_int64_t) void;
 pub extern fn archive_write_set_bytes_per_block(*struct_archive, bytes_per_block: c_int) c_int;
 pub extern fn archive_write_get_bytes_per_block(*struct_archive) c_int;
@@ -1091,8 +1068,8 @@ pub extern fn archive_write_disk_new() *struct_archive;
 pub extern fn archive_write_disk_set_skip_file(*struct_archive, la_int64_t, la_int64_t) c_int;
 pub extern fn archive_write_disk_set_options(*struct_archive, flags: c_int) c_int;
 pub extern fn archive_write_disk_set_standard_lookup(*struct_archive) c_int;
-pub extern fn archive_write_disk_set_group_lookup(*struct_archive, ?*anyopaque, ?*const fn (?*anyopaque, [*c]const u8, la_int64_t) callconv(.C) la_int64_t, ?*const fn (?*anyopaque) callconv(.C) void) c_int;
-pub extern fn archive_write_disk_set_user_lookup(*struct_archive, ?*anyopaque, ?*const fn (?*anyopaque, [*c]const u8, la_int64_t) callconv(.C) la_int64_t, ?*const fn (?*anyopaque) callconv(.C) void) c_int;
+pub extern fn archive_write_disk_set_group_lookup(*struct_archive, ?*anyopaque, ?*const fn (?*anyopaque, [*c]const u8, la_int64_t) callconv(.c) la_int64_t, ?*const fn (?*anyopaque) callconv(.c) void) c_int;
+pub extern fn archive_write_disk_set_user_lookup(*struct_archive, ?*anyopaque, ?*const fn (?*anyopaque, [*c]const u8, la_int64_t) callconv(.c) la_int64_t, ?*const fn (?*anyopaque) callconv(.c) void) c_int;
 pub extern fn archive_write_disk_gid(*struct_archive, [*c]const u8, la_int64_t) la_int64_t;
 pub extern fn archive_write_disk_uid(*struct_archive, [*c]const u8, la_int64_t) la_int64_t;
 pub extern fn archive_read_disk_new() *struct_archive;
@@ -1103,8 +1080,8 @@ pub extern fn archive_read_disk_entry_from_file(*struct_archive, *struct_archive
 pub extern fn archive_read_disk_gname(*struct_archive, la_int64_t) [*c]const u8;
 pub extern fn archive_read_disk_uname(*struct_archive, la_int64_t) [*c]const u8;
 pub extern fn archive_read_disk_set_standard_lookup(*struct_archive) c_int;
-pub extern fn archive_read_disk_set_gname_lookup(*struct_archive, ?*anyopaque, ?*const fn (?*anyopaque, la_int64_t) callconv(.C) [*c]const u8, ?*const fn (?*anyopaque) callconv(.C) void) c_int;
-pub extern fn archive_read_disk_set_uname_lookup(*struct_archive, ?*anyopaque, ?*const fn (?*anyopaque, la_int64_t) callconv(.C) [*c]const u8, ?*const fn (?*anyopaque) callconv(.C) void) c_int;
+pub extern fn archive_read_disk_set_gname_lookup(*struct_archive, ?*anyopaque, ?*const fn (?*anyopaque, la_int64_t) callconv(.c) [*c]const u8, ?*const fn (?*anyopaque) callconv(.c) void) c_int;
+pub extern fn archive_read_disk_set_uname_lookup(*struct_archive, ?*anyopaque, ?*const fn (?*anyopaque, la_int64_t) callconv(.c) [*c]const u8, ?*const fn (?*anyopaque) callconv(.c) void) c_int;
 pub extern fn archive_read_disk_open(*struct_archive, [*c]const u8) c_int;
 pub extern fn archive_read_disk_open_w(*struct_archive, [*c]const wchar_t) c_int;
 pub extern fn archive_read_disk_descend(*struct_archive) c_int;
@@ -1114,8 +1091,8 @@ pub extern fn archive_read_disk_current_filesystem_is_synthetic(*struct_archive)
 pub extern fn archive_read_disk_current_filesystem_is_remote(*struct_archive) c_int;
 pub extern fn archive_read_disk_set_atime_restored(*struct_archive) c_int;
 pub extern fn archive_read_disk_set_behavior(*struct_archive, flags: c_int) c_int;
-pub extern fn archive_read_disk_set_matching(*struct_archive, _matching: *struct_archive, _excluded_func: ?*const fn (*struct_archive, ?*anyopaque, *struct_archive_entry) callconv(.C) void, _client_data: ?*anyopaque) c_int;
-pub extern fn archive_read_disk_set_metadata_filter_callback(*struct_archive, _metadata_filter_func: ?*const fn (*struct_archive, ?*anyopaque, *struct_archive_entry) callconv(.C) c_int, _client_data: ?*anyopaque) c_int;
+pub extern fn archive_read_disk_set_matching(*struct_archive, _matching: *struct_archive, _excluded_func: ?*const fn (*struct_archive, ?*anyopaque, *struct_archive_entry) callconv(.c) void, _client_data: ?*anyopaque) c_int;
+pub extern fn archive_read_disk_set_metadata_filter_callback(*struct_archive, _metadata_filter_func: ?*const fn (*struct_archive, ?*anyopaque, *struct_archive_entry) callconv(.c) c_int, _client_data: ?*anyopaque) c_int;
 pub extern fn archive_filter_count(*struct_archive) c_int;
 pub extern fn archive_filter_bytes(*struct_archive, c_int) la_int64_t;
 pub extern fn archive_filter_code(*struct_archive, c_int) c_int;
@@ -1362,3 +1339,12 @@ pub const ARCHIVE_ENTRY_ACL_STYLE_SEPARATOR_COMMA = @as(c_int, 0x00000008);
 pub const ARCHIVE_ENTRY_ACL_STYLE_COMPACT = @as(c_int, 0x00000010);
 pub const OLD_ARCHIVE_ENTRY_ACL_STYLE_EXTRA_ID = @as(c_int, 1024);
 pub const OLD_ARCHIVE_ENTRY_ACL_STYLE_MARK_DEFAULT = @as(c_int, 2048);
+
+const std = @import("std");
+
+const bun = @import("bun");
+const OOM = bun.OOM;
+const mode_t = bun.Mode;
+
+const FILE = @import("std").c.FILE;
+const dev_t = @import("std").c.dev_t;

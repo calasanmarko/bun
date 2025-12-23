@@ -1,11 +1,4 @@
-const std = @import("std");
-const bun = @import("root").bun;
-const string = bun.string;
-const ImportRecord = @import("./import_record.zig").ImportRecord;
-const ImportKind = @import("./import_record.zig").ImportKind;
-const lol = @import("./deps/lol-html.zig");
-const logger = bun.logger;
-const fs = bun.fs;
+const HTMLScanner = @This();
 
 allocator: std.mem.Allocator,
 import_records: ImportRecord.List = .{},
@@ -25,7 +18,7 @@ pub fn deinit(this: *HTMLScanner) void {
     for (this.import_records.slice()) |*record| {
         this.allocator.free(record.path.text);
     }
-    this.import_records.deinitWithAllocator(this.allocator);
+    this.import_records.deinit(this.allocator);
 }
 
 fn createImportRecord(this: *HTMLScanner, input_path: []const u8, kind: ImportKind) !void {
@@ -51,10 +44,10 @@ fn createImportRecord(this: *HTMLScanner, input_path: []const u8, kind: ImportKi
         .range = logger.Range.None,
     };
 
-    try this.import_records.push(this.allocator, record);
+    try this.import_records.append(this.allocator, record);
 }
 
-const debug = bun.Output.scoped(.HTMLScanner, true);
+const debug = bun.Output.scoped(.HTMLScanner, .hidden);
 
 pub fn onWriteHTML(_: *HTMLScanner, bytes: []const u8) void {
     _ = bytes; // bytes are not written in scan phase
@@ -65,7 +58,7 @@ pub fn onHTMLParseError(this: *HTMLScanner, message: []const u8) void {
         this.source,
         logger.Loc.Empty,
         message,
-    ) catch bun.outOfMemory();
+    ) catch |err| bun.handleOom(err);
 }
 
 pub fn onTag(this: *HTMLScanner, _: *lol.Element, path: []const u8, url_attribute: []const u8, kind: ImportKind) void {
@@ -79,7 +72,11 @@ pub fn scan(this: *HTMLScanner, input: []const u8) !void {
     try processor.run(this, input);
 }
 
-pub fn HTMLProcessor(comptime T: type, comptime visit_head_and_body: bool) type {
+pub fn HTMLProcessor(
+    comptime T: type,
+    /// If the visitor should visit html, head, body
+    comptime visit_document_tags: bool,
+) type {
     return struct {
         const TagHandler = struct {
             /// CSS selector to match elements
@@ -148,12 +145,6 @@ pub fn HTMLProcessor(comptime T: type, comptime visit_head_and_body: bool) type 
             // Icons
             .{
                 .selector = "link[rel='icon'][href], link[rel='apple-touch-icon'][href]",
-                .url_attribute = "href",
-                .kind = .url,
-            },
-            // Catch-all for other links with href
-            .{
-                .selector = "link:not([rel~='stylesheet']):not([rel~='modulepreload']):not([rel~='manifest']):not([rel~='icon']):not([rel~='apple-touch-icon'])[href]",
                 .url_attribute = "href",
                 .kind = .url,
             },
@@ -231,7 +222,7 @@ pub fn HTMLProcessor(comptime T: type, comptime visit_head_and_body: bool) type 
             var builder = lol.HTMLRewriter.Builder.init();
             defer builder.deinit();
 
-            var selectors: std.BoundedArray(*lol.HTMLSelector, tag_handlers.len + if (visit_head_and_body) 2 else 0) = .{};
+            var selectors: bun.BoundedArray(*lol.HTMLSelector, tag_handlers.len + if (visit_document_tags) 3 else 0) = .{};
             defer for (selectors.slice()) |selector| {
                 selector.deinit();
             };
@@ -254,36 +245,23 @@ pub fn HTMLProcessor(comptime T: type, comptime visit_head_and_body: bool) type 
                 );
             }
 
-            if (visit_head_and_body) {
-                const head_selector = try lol.HTMLSelector.parse("head");
-                selectors.appendAssumeCapacity(head_selector);
-                try builder.addElementContentHandlers(
-                    head_selector,
-                    T,
-                    T.onHeadTag,
-                    this,
-                    void,
-                    null,
-                    null,
-                    void,
-                    null,
-                    null,
-                );
-
-                const body_selector = try lol.HTMLSelector.parse("body");
-                selectors.appendAssumeCapacity(body_selector);
-                try builder.addElementContentHandlers(
-                    body_selector,
-                    T,
-                    T.onBodyTag,
-                    this,
-                    void,
-                    null,
-                    null,
-                    void,
-                    null,
-                    null,
-                );
+            if (visit_document_tags) {
+                inline for (.{ "body", "head", "html" }, &.{ T.onBodyTag, T.onHeadTag, T.onHtmlTag }) |tag, cb| {
+                    const head_selector = try lol.HTMLSelector.parse(tag);
+                    selectors.appendAssumeCapacity(head_selector);
+                    try builder.addElementContentHandlers(
+                        head_selector,
+                        T,
+                        cb,
+                        this,
+                        void,
+                        null,
+                        null,
+                        void,
+                        null,
+                        null,
+                    );
+                }
             }
 
             const memory_settings = lol.MemorySettings{
@@ -319,4 +297,12 @@ pub fn HTMLProcessor(comptime T: type, comptime visit_head_and_body: bool) type 
     };
 }
 
-const HTMLScanner = @This();
+const lol = @import("./deps/lol-html.zig");
+const std = @import("std");
+
+const ImportKind = @import("./import_record.zig").ImportKind;
+const ImportRecord = @import("./import_record.zig").ImportRecord;
+
+const bun = @import("bun");
+const fs = bun.fs;
+const logger = bun.logger;

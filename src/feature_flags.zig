@@ -1,15 +1,13 @@
-const env = @import("env.zig");
-const bun = @import("root").bun;
+//! If you are adding feature-flags to this file, you are in the wrong spot. Go to env_var.zig
+//! instead.
 
 /// Enable breaking changes for the next major release of Bun
 // TODO: Make this a CLI flag / runtime var so that we can verify disabled code paths can compile
-pub const breaking_changes_1_3 = false;
+pub const breaking_changes_1_4 = false;
 
 /// Store and reuse file descriptors during module resolution
 /// This was a ~5% performance improvement
 pub const store_file_descriptors = !env.isBrowser;
-
-pub const jsx_runtime_is_cjs = true;
 
 pub const tracing = true;
 
@@ -25,15 +23,7 @@ pub const watch_directories = true;
 // This feature flag exists so when you have defines inside package.json, you can use single quotes in nested strings.
 pub const allow_json_single_quotes = true;
 
-pub const react_specific_warnings = true;
-
 pub const is_macro_enabled = !env.isWasm and !env.isWasi;
-
-// pretend everything is always the macro environment
-// useful for debugging the macro's JSX transform
-pub const force_macro = false;
-
-pub const include_filename_in_jsx = false;
 
 pub const disable_compression_in_http_client = false;
 
@@ -65,7 +55,7 @@ pub const inline_properties_in_transpiler = true;
 
 pub const same_target_becomes_destructuring = true;
 
-pub const help_catch_memory_issues = bun.Environment.allow_assert;
+pub const help_catch_memory_issues = bun.Environment.enable_asan or bun.Environment.isDebug;
 
 /// This performs similar transforms as https://github.com/rollup/plugins/tree/master/packages/commonjs
 ///
@@ -110,8 +100,6 @@ pub const unwrap_commonjs_to_esm = true;
 /// https://github.com/source-map/source-map-rfc/pull/20
 pub const source_map_debug_id = true;
 
-pub const alignment_tweak = false;
-
 pub const export_star_redirect = false;
 
 pub const streaming_file_uploads_for_http_client = true;
@@ -131,13 +119,6 @@ pub const runtime_transpiler_cache = true;
 /// order to isolate your bug.
 pub const windows_bunx_fast_path = true;
 
-// This causes strange bugs where writing via console.log (sync) has a different
-// order than via Bun.file.writer() so we turn it off until there's a unified,
-// buffered writer abstraction shared throughout Bun
-pub const nonblocking_stdout_and_stderr_on_posix = false;
-
-pub const postgresql = env.is_canary or env.isDebug;
-
 // TODO: fix Windows-only test failures in fetch-preconnect.test.ts
 pub const is_fetch_preconnect_supported = env.isPosix;
 
@@ -149,16 +130,19 @@ pub fn isLibdeflateEnabled() bool {
         return false;
     }
 
-    return !bun.getRuntimeFeatureFlag("BUN_FEATURE_FLAG_NO_LIBDEFLATE");
+    return !bun.feature_flag.BUN_FEATURE_FLAG_NO_LIBDEFLATE.get();
 }
 
 /// Enable the "app" option in Bun.serve. This option will likely be removed
 /// in favor of HTML loaders and configuring framework options in bunfig.toml
 pub fn bake() bool {
     // In canary or if an environment variable is specified.
-    return env.is_canary or env.isDebug or bun.getRuntimeFeatureFlag("BUN_FEATURE_FLAG_EXPERIMENTAL_BAKE");
+    return env.is_canary or env.isDebug or bun.feature_flag.BUN_FEATURE_FLAG_EXPERIMENTAL_BAKE.get();
 }
 
 /// Additional debugging features for bake.DevServer, such as the incremental visualizer.
 /// To use them, extra flags are passed in addition to this one.
 pub const bake_debugging_features = env.is_canary or env.isDebug;
+
+const bun = @import("bun");
+const env = @import("./env.zig");

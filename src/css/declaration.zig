@@ -1,17 +1,9 @@
-const std = @import("std");
-const Allocator = std.mem.Allocator;
-const bun = @import("root").bun;
-const logger = bun.logger;
-const Log = logger.Log;
-
 pub const css = @import("./css_parser.zig");
 pub const Error = css.Error;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
-const PrintResult = css.PrintResult;
 const Result = css.Result;
 
-const ArrayList = std.ArrayListUnmanaged;
 pub const DeclarationList = ArrayList(css.Property);
 
 const BackgroundHandler = css.css_properties.background.BackgroundHandler;
@@ -50,16 +42,15 @@ pub const DeclarationBlock = struct {
     const DebugFmt = struct {
         self: *const DeclarationBlock,
 
-        pub fn format(this: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-            _ = fmt; // autofix
-            _ = options; // autofix
-            var arraylist = ArrayList(u8){};
-            const w = arraylist.writer(bun.default_allocator);
-            defer arraylist.deinit(bun.default_allocator);
-            var printer = css.Printer(@TypeOf(w)).new(bun.default_allocator, std.ArrayList(u8).init(bun.default_allocator), w, css.PrinterOptions.default(), null);
+        pub fn format(this: @This(), writer: *std.Io.Writer) !void {
+            var arraylist = std.Io.Writer.Allocating.init(bun.default_allocator);
+            const w = &arraylist.writer;
+            defer arraylist.deinit();
+            var symbols = bun.ast.Symbol.Map{};
+            var printer = css.Printer.new(bun.default_allocator, std.array_list.Managed(u8).init(bun.default_allocator), w, css.PrinterOptions.default(), null, null, &symbols);
             defer printer.deinit();
-            this.self.toCss(@TypeOf(w), &printer) catch |e| return try writer.print("<error writing declaration block: {s}>\n", .{@errorName(e)});
-            try writer.writeAll(arraylist.items);
+            this.self.toCss(&printer) catch |e| return try writer.print("<error writing declaration block: {s}>\n", .{@errorName(e)});
+            try writer.writeAll(arraylist.written());
         }
     };
 
@@ -103,7 +94,7 @@ pub const DeclarationBlock = struct {
         return this.declarations.items.len + this.important_declarations.items.len;
     }
 
-    pub fn toCss(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const This, dest: *Printer) PrintErr!void {
         const length = this.len();
         var i: usize = 0;
 
@@ -114,7 +105,7 @@ pub const DeclarationBlock = struct {
             const is_important = comptime std.mem.eql(u8, decl_field_name, "important_declarations");
 
             for (decls.items) |*decl| {
-                try decl.toCss(W, dest, is_important);
+                try decl.toCss(dest, is_important);
                 if (i != length - 1) {
                     try dest.writeChar(';');
                     try dest.whitespace();
@@ -127,7 +118,7 @@ pub const DeclarationBlock = struct {
     }
 
     /// Writes the declarations to a CSS block, including starting and ending braces.
-    pub fn toCssBlock(this: *const This, comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCssBlock(this: *const This, dest: *Printer) PrintErr!void {
         try dest.whitespace();
         try dest.writeChar('{');
         dest.indent();
@@ -142,7 +133,7 @@ pub const DeclarationBlock = struct {
             const is_important = comptime std.mem.eql(u8, decl_field_name, "important_declarations");
             for (decls.items) |*decl| {
                 try dest.newline();
-                try decl.toCss(W, dest, is_important);
+                try decl.toCss(dest, is_important);
                 if (i != length - 1 or !dest.minify) {
                     try dest.writeChar(';');
                 }
@@ -175,7 +166,7 @@ pub const DeclarationBlock = struct {
                     const handled = hndlr.handleProperty(prop, ctx);
 
                     if (!handled) {
-                        hndlr.decls.append(ctx.allocator, prop.*) catch bun.outOfMemory();
+                        bun.handleOom(hndlr.decls.append(ctx.allocator, prop.*));
                         // replacing with a property which does not require allocation
                         // to "delete"
                         prop.* = css.Property{ .all = .@"revert-layer" };
@@ -299,6 +290,17 @@ pub fn parse_declaration(
     important_declarations: *DeclarationList,
     options: *const css.ParserOptions,
 ) Result(void) {
+    return parse_declaration_impl(name, input, declarations, important_declarations, options, {});
+}
+
+pub fn parse_declaration_impl(
+    name: []const u8,
+    input: *css.Parser,
+    declarations: *DeclarationList,
+    important_declarations: *DeclarationList,
+    options: *const css.ParserOptions,
+    composes_ctx: anytype,
+) Result(void) {
     const property_id = css.PropertyId.fromStr(name);
     var delimiters = css.Delimiters{ .bang = true };
     if (property_id != .custom or property_id.custom != .custom) {
@@ -312,7 +314,8 @@ pub fn parse_declaration(
         .property_id = property_id,
         .options = options,
     };
-    const property = switch (input.parseUntilBefore(delimiters, css.Property, &closure, struct {
+    const source_location = input.currentSourceLocation();
+    var property = switch (input.parseUntilBefore(delimiters, css.Property, &closure, struct {
         pub fn parseFn(this: *Closure, input2: *css.Parser) Result(css.Property) {
             return css.Property.parse(this.property_id, input2, this.options);
         }
@@ -327,13 +330,50 @@ pub fn parse_declaration(
         }
     }.parsefn, .{}).isOk();
     if (input.expectExhausted().asErr()) |e| return .{ .err = e };
+
+    if (comptime @TypeOf(composes_ctx) != void) {
+        if (input.flags.css_modules and property == .composes) {
+            switch (composes_ctx.composes_state) {
+                .disallow_entirely => {},
+                .allow => {
+                    composes_ctx.recordComposes(input.allocator(), &property.composes);
+                },
+                .disallow_nested => |info| {
+                    options.warnFmtWithNotes(
+                        "\"composes\" is not allowed inside nested selectors",
+                        .{},
+                        info.line,
+                        info.column,
+                        &[_]bun.logger.Data{},
+                    );
+                },
+                .disallow_not_single_class => |info| {
+                    options.warnFmtWithNotes(
+                        "\"composes\" only works inside single class selectors",
+                        .{},
+                        source_location.line,
+                        source_location.column,
+                        options.allocator.dupe(
+                            bun.logger.Data,
+                            &[_]bun.logger.Data{
+                                bun.logger.Data{
+                                    .text = bun.handleOom(options.allocator.dupe(u8, "The parent selector is not a single class selector because of the syntax here:")),
+                                    .location = info.toLoggerLocation(options.filename),
+                                },
+                            },
+                        ) catch |err| bun.handleOom(err),
+                    );
+                },
+            }
+        }
+    }
     if (important) {
-        important_declarations.append(input.allocator(), property) catch bun.outOfMemory();
+        bun.handleOom(important_declarations.append(input.allocator(), property));
     } else {
-        declarations.append(input.allocator(), property) catch bun.outOfMemory();
+        bun.handleOom(declarations.append(input.allocator(), property));
     }
 
-    return .{ .result = {} };
+    return .success;
 }
 
 pub const DeclarationHandler = struct {
@@ -360,11 +400,11 @@ pub const DeclarationHandler = struct {
         _ = allocator; // autofix
         if (this.direction) |direction| {
             this.direction = null;
-            this.decls.append(context.allocator, css.Property{ .direction = direction }) catch bun.outOfMemory();
+            bun.handleOom(this.decls.append(context.allocator, css.Property{ .direction = direction }));
         }
         // if (this.unicode_bidi) |unicode_bidi| {
         //     this.unicode_bidi = null;
-        //     this.decls.append(context.allocator, css.Property{ .unicode_bidi = unicode_bidi }) catch bun.outOfMemory();
+        //     this.decls.append(context.allocator, css.Property{ .unicode_bidi = unicode_bidi }) catch |err| bun.handleOom(err);
         // }
 
         this.background.finalize(&this.decls, context);
@@ -410,3 +450,10 @@ pub const DeclarationHandler = struct {
         };
     }
 };
+
+const bun = @import("bun");
+const logger = bun.logger;
+
+const std = @import("std");
+const ArrayList = std.ArrayListUnmanaged;
+const Allocator = std.mem.Allocator;

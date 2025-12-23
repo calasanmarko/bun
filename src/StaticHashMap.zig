@@ -1,13 +1,5 @@
 // https://github.com/lithdew/rheia/blob/162293d0f0e8d6572a8954c0add83f13f76b3cc6/hash_map.zig
 // Apache License 2.0
-const std = @import("std");
-
-const mem = std.mem;
-const math = std.math;
-const testing = std.testing;
-
-const bun = @import("root").bun;
-const assert = bun.assert;
 
 pub fn AutoHashMap(comptime K: type, comptime V: type, comptime max_load_percentage: comptime_int) type {
     return HashMap(K, V, std.hash_map.AutoContext(K), max_load_percentage);
@@ -35,10 +27,8 @@ pub fn StaticHashMap(comptime K: type, comptime V: type, comptime Context: type,
                 return self.hash == empty_hash;
             }
 
-            pub fn format(self: Entry, comptime layout: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-                _ = layout;
-                _ = options;
-                try std.fmt.format(writer, "(hash: {}, key: {}, value: {})", .{ self.hash, self.key, self.value });
+            pub fn format(self: Entry, writer: *std.Io.Writer) !void {
+                try writer.print("(hash: {}, key: {}, value: {})", .{ self.hash, self.key, self.value });
             }
         };
 
@@ -57,7 +47,20 @@ pub fn StaticHashMap(comptime K: type, comptime V: type, comptime Context: type,
         // get_probe_count: usize = 0,
         // del_probe_count: usize = 0,
 
-        pub usingnamespace HashMapMixin(Self, K, V, Context);
+        const impl = HashMapMixin(Self, K, V, Context);
+        pub const putAssumeCapacity = impl.putAssumeCapacity;
+        pub const slice = impl.slice;
+        pub const clearRetainingCapacity = impl.clearRetainingCapacity;
+        pub const putAssumeCapacityContext = impl.putAssumeCapacityContext;
+        pub const getOrPutAssumeCapacity = impl.getOrPutAssumeCapacity;
+        pub const getOrPutAssumeCapacityContext = impl.getOrPutAssumeCapacityContext;
+        pub const get = impl.get;
+        pub const getContext = impl.getContext;
+        pub const has = impl.has;
+        pub const hasWithHash = impl.hasWithHash;
+        pub const hasContext = impl.hasContext;
+        pub const delete = impl.delete;
+        pub const deleteContext = impl.deleteContext;
     };
 }
 
@@ -74,10 +77,8 @@ pub fn HashMap(comptime K: type, comptime V: type, comptime Context: type, compt
                 return self.hash == empty_hash;
             }
 
-            pub fn format(self: Entry, comptime layout: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-                _ = layout;
-                _ = options;
-                try std.fmt.format(writer, "(hash: {}, key: {}, value: {})", .{ self.hash, self.key, self.value });
+            pub fn format(self: Entry, writer: *std.Io.Writer) !void {
+                try writer.print("(hash: {}, key: {}, value: {})", .{ self.hash, self.key, self.value });
             }
         };
 
@@ -96,7 +97,20 @@ pub fn HashMap(comptime K: type, comptime V: type, comptime Context: type, compt
         // get_probe_count: usize = 0,
         // del_probe_count: usize = 0,
 
-        pub usingnamespace HashMapMixin(Self, K, V, Context);
+        const impl = HashMapMixin(Self, K, V, Context);
+        pub const putAssumeCapacity = impl.putAssumeCapacity;
+        pub const slice = impl.slice;
+        pub const clearRetainingCapacity = impl.clearRetainingCapacity;
+        pub const putAssumeCapacityContext = impl.putAssumeCapacityContext;
+        pub const getOrPutAssumeCapacity = impl.getOrPutAssumeCapacity;
+        pub const getOrPutAssumeCapacityContext = impl.getOrPutAssumeCapacityContext;
+        pub const get = impl.get;
+        pub const getContext = impl.getContext;
+        pub const has = impl.has;
+        pub const hasWithHash = impl.hasWithHash;
+        pub const hasContext = impl.hasContext;
+        pub const delete = impl.delete;
+        pub const deleteContext = impl.deleteContext;
 
         pub fn initCapacity(gpa: mem.Allocator, capacity: u64) !Self {
             assert(math.isPowerOfTwo(capacity));
@@ -337,10 +351,8 @@ pub fn SortedHashMap(comptime V: type, comptime max_load_percentage: comptime_in
                 return cmp(self.hash, empty_hash) == .eq;
             }
 
-            pub fn format(self: Entry, comptime layout: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-                _ = layout;
-                _ = options;
-                try std.fmt.format(writer, "(hash: {}, value: {})", .{ std.fmt.fmtSliceHexLower(mem.asBytes(&self.hash)), self.value });
+            pub fn format(self: Entry, writer: *std.Io.Writer) !void {
+                try writer.print("(hash: {x}, value: {})", .{ mem.asBytes(&self.hash), self.value });
             }
         };
 
@@ -759,3 +771,11 @@ test "SortedHashMap: collision test" {
     try testing.expectEqual(@as(usize, 1), map.delete(prefix ++ [_]u8{1}).?);
     try testing.expectEqual(@as(usize, 2), map.delete(prefix ++ [_]u8{2}).?);
 }
+
+const bun = @import("bun");
+const assert = bun.assert;
+
+const std = @import("std");
+const math = std.math;
+const mem = std.mem;
+const testing = std.testing;

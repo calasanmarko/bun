@@ -1,22 +1,21 @@
-const bun = @import("root").bun;
-const std = @import("std");
-const sys = bun.sys;
-const linux = std.os.linux;
-const Environment = bun.Environment;
+//! Confusingly, this is the barely used epoll/kqueue event loop
+//! This is only used by Bun.write() and Bun.file(path).text() & friends.
+//!
+//! Most I/O happens on the main thread.
+
 pub const heap = @import("./heap.zig");
-const JSC = bun.JSC;
 
-const log = bun.Output.scoped(.loop, false);
+pub const openForWriting = @import("./openForWriting.zig").openForWriting;
+pub const openForWritingImpl = @import("./openForWriting.zig").openForWritingImpl;
 
-const posix = std.posix;
-const assert = bun.assert;
+const log = bun.Output.scoped(.loop, .visible);
 
 pub const Source = @import("./source.zig").Source;
 
 pub const Loop = struct {
     pending: Request.Queue = .{},
     waker: bun.Async.Waker,
-    epoll_fd: if (Environment.isLinux) bun.FileDescriptor else u0 = if (Environment.isLinux) .zero else 0,
+    epoll_fd: if (Environment.isLinux) bun.FileDescriptor else void = if (Environment.isLinux) .invalid,
 
     cached_now: posix.timespec = .{
         .nsec = 0,
@@ -31,7 +30,7 @@ pub const Loop = struct {
             .waker = bun.Async.Waker.init() catch @panic("failed to initialize waker"),
         };
         if (comptime Environment.isLinux) {
-            loop.epoll_fd = bun.toFD(std.posix.epoll_create1(std.os.linux.EPOLL.CLOEXEC | 0) catch @panic("Failed to create epoll file descriptor"));
+            loop.epoll_fd = .fromNative(std.posix.epoll_create1(std.os.linux.EPOLL.CLOEXEC | 0) catch @panic("Failed to create epoll file descriptor"));
 
             {
                 var epoll = std.mem.zeroes(std.os.linux.epoll_event);
@@ -39,7 +38,7 @@ pub const Loop = struct {
                 epoll.data.ptr = @intFromPtr(&loop);
                 const rc = std.os.linux.epoll_ctl(loop.epoll_fd.cast(), std.os.linux.EPOLL.CTL_ADD, loop.waker.getFd().cast(), &epoll);
 
-                switch (bun.C.getErrno(rc)) {
+                switch (bun.sys.getErrno(rc)) {
                     .SUCCESS => {},
                     else => |err| bun.Output.panic("Failed to wait on epoll {s}", .{@tagName(err)}),
                 }
@@ -126,7 +125,7 @@ pub const Loop = struct {
                             }
                         },
                         .close => |close| {
-                            log("close({}, registered={any})", .{ close.fd, close.poll.flags.contains(.registered) });
+                            log("close({f}, registered={})", .{ close.fd, close.poll.flags.contains(.registered) });
                             // Only remove from the interest list if it was previously registered.
                             // Otherwise, epoll gets confused.
                             // This state can happen if polling for readable/writable previously failed.
@@ -149,7 +148,7 @@ pub const Loop = struct {
                 std.math.maxInt(i32),
             );
 
-            switch (bun.C.getErrno(rc)) {
+            switch (bun.sys.getErrno(rc)) {
                 .INTR => continue,
                 .SUCCESS => {},
                 else => |e| bun.Output.panic("epoll_wait: {s}", .{@tagName(e)}),
@@ -159,7 +158,7 @@ pub const Loop = struct {
 
             const current_events: []std.os.linux.epoll_event = events[0..rc];
             if (rc != 0) {
-                log("epoll_wait({}) = {d}", .{ this.pollfd(), rc });
+                log("epoll_wait({f}) = {d}", .{ this.pollfd(), rc });
             }
 
             for (current_events) |event| {
@@ -197,14 +196,14 @@ pub const Loop = struct {
 
         while (true) {
             var stack_fallback = std.heap.stackFallback(@sizeOf([256]EventType), bun.default_allocator);
-            var events_list: std.ArrayList(EventType) = std.ArrayList(EventType).initCapacity(stack_fallback.get(), 256) catch unreachable;
+            var events_list: std.array_list.Managed(EventType) = std.array_list.Managed(EventType).initCapacity(stack_fallback.get(), 256) catch unreachable;
             defer events_list.deinit();
 
             // Process pending requests
             {
                 var pending_batch = this.pending.popBatch();
                 var pending = pending_batch.iterator();
-                events_list.ensureUnusedCapacity(pending.batch.count) catch bun.outOfMemory();
+                bun.handleOom(events_list.ensureUnusedCapacity(pending.batch.count));
                 @memset(std.mem.sliceAsBytes(events_list.items.ptr[0..events_list.capacity]), 0);
 
                 while (pending.next()) |request| {
@@ -270,7 +269,7 @@ pub const Loop = struct {
                 null,
             );
 
-            switch (bun.C.getErrno(rc)) {
+            switch (bun.sys.getErrno(rc)) {
                 .INTR => continue,
                 .SUCCESS => {},
                 else => |e| bun.Output.panic("kevent64 failed: {s}", .{@tagName(e)}),
@@ -306,7 +305,8 @@ pub const Loop = struct {
             timespec.sec = @intCast(sec);
             timespec.nsec = @intCast(nsec);
         } else {
-            std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC, timespec) catch {};
+            const updated = std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC) catch return;
+            timespec.* = updated;
         }
     }
 };
@@ -342,9 +342,6 @@ pub const Action = union(enum) {
         onDone: *const fn (*anyopaque) void,
     };
 };
-
-const ReadFile = bun.JSC.WebCore.Blob.ReadFile;
-const WriteFile = bun.JSC.WebCore.Blob.WriteFile;
 
 const Pollable = struct {
     const Tag = enum(bun.TaggedPointer.Tag) {
@@ -498,7 +495,7 @@ pub const Poll = struct {
             fd: bun.FileDescriptor,
             kqueue_event: *std.posix.system.kevent64_s,
         ) void {
-            log("register({s}, {})", .{ @tagName(action), fd });
+            log("register({s}, {f})", .{ @tagName(action), fd });
             defer {
                 switch (comptime action) {
                     .readable => poll.flags.insert(Flags.poll_readable),
@@ -525,7 +522,7 @@ pub const Poll = struct {
 
             kqueue_event.* = switch (comptime action) {
                 .readable => .{
-                    .ident = @as(u64, @intCast(fd.int())),
+                    .ident = @as(u64, @intCast(fd.native())),
                     .filter = std.posix.system.EVFILT.READ,
                     .data = 0,
                     .fflags = 0,
@@ -534,7 +531,7 @@ pub const Poll = struct {
                     .ext = .{ generation_number_monotonic, 0 },
                 },
                 .writable => .{
-                    .ident = @as(u64, @intCast(fd.int())),
+                    .ident = @as(u64, @intCast(fd.native())),
                     .filter = std.posix.system.EVFILT.WRITE,
                     .data = 0,
                     .fflags = 0,
@@ -543,7 +540,7 @@ pub const Poll = struct {
                     .ext = .{ generation_number_monotonic, 0 },
                 },
                 .cancel => if (poll.flags.contains(.poll_readable)) .{
-                    .ident = @as(u64, @intCast(fd.int())),
+                    .ident = @as(u64, @intCast(fd.native())),
                     .filter = std.posix.system.EVFILT.READ,
                     .data = 0,
                     .fflags = 0,
@@ -551,7 +548,7 @@ pub const Poll = struct {
                     .flags = std.c.EV.DELETE,
                     .ext = .{ poll.generation_number, 0 },
                 } else if (poll.flags.contains(.poll_writable)) .{
-                    .ident = @as(u64, @intCast(fd.int())),
+                    .ident = @as(u64, @intCast(fd.native())),
                     .filter = std.posix.system.EVFILT.WRITE,
                     .data = 0,
                     .fflags = 0,
@@ -613,7 +610,7 @@ pub const Poll = struct {
             inline else => |t| {
                 var this: *Pollable.Tag.Type(t) = @alignCast(@fieldParentPtr("io_poll", poll));
                 if (event.events & linux.EPOLL.ERR != 0) {
-                    const errno = bun.C.getErrno(event.events);
+                    const errno = bun.sys.getErrno(event.events);
                     log("error() = {s}", .{@tagName(errno)});
                     this.onIOError(bun.sys.Error.fromCode(errno, .epoll_ctl));
                 } else {
@@ -624,10 +621,10 @@ pub const Poll = struct {
         }
     }
 
-    pub fn registerForEpoll(this: *Poll, tag: Pollable.Tag, loop: *Loop, comptime flag: Flags, one_shot: bool, fd: bun.FileDescriptor) JSC.Maybe(void) {
+    pub fn registerForEpoll(this: *Poll, tag: Pollable.Tag, loop: *Loop, comptime flag: Flags, one_shot: bool, fd: bun.FileDescriptor) bun.sys.Maybe(void) {
         const watcher_fd = loop.pollfd();
 
-        log("register: {s} ({})", .{ @tagName(flag), fd });
+        log("register: {s} ({f})", .{ @tagName(flag), fd });
 
         bun.assert(fd != bun.invalid_fd);
 
@@ -658,7 +655,7 @@ pub const Poll = struct {
                 &event,
             );
 
-            if (JSC.Maybe(void).errnoSys(ctl, .epoll_ctl)) |errno| {
+            if (bun.sys.Maybe(void).errnoSys(ctl, .epoll_ctl)) |errno| {
                 return errno;
             }
             // Only mark if it successfully registered.
@@ -678,11 +675,11 @@ pub const Poll = struct {
         });
         this.flags.remove(.needs_rearm);
 
-        return JSC.Maybe(void).success;
+        return .success;
     }
 };
 
-pub const retry = bun.C.E.AGAIN;
+pub const retry = bun.sys.E.AGAIN;
 
 pub const ReadState = @import("./pipes.zig").ReadState;
 pub const PipeReader = @import("./PipeReader.zig").PipeReader;
@@ -693,3 +690,15 @@ pub const WriteStatus = @import("./PipeWriter.zig").WriteStatus;
 pub const StreamingWriter = @import("./PipeWriter.zig").StreamingWriter;
 pub const StreamBuffer = @import("./PipeWriter.zig").StreamBuffer;
 pub const FileType = @import("./pipes.zig").FileType;
+pub const MaxBuf = @import("./MaxBuf.zig");
+
+const bun = @import("bun");
+const Environment = bun.Environment;
+const assert = bun.assert;
+const sys = bun.sys;
+const ReadFile = bun.webcore.Blob.read_file.ReadFile;
+const WriteFile = bun.webcore.Blob.write_file.WriteFile;
+
+const std = @import("std");
+const posix = std.posix;
+const linux = std.os.linux;

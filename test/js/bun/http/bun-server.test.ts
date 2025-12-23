@@ -1,9 +1,13 @@
 import type { Server, ServerWebSocket, Socket } from "bun";
 import { describe, expect, test } from "bun:test";
-import { bunEnv, bunExe, rejectUnauthorizedScope, tempDirWithFiles } from "harness";
+import { bunEnv, bunExe, bunRun, rejectUnauthorizedScope, tempDirWithFiles, tls } from "harness";
 import path from "path";
 
-describe("Server", () => {
+describe.concurrent("Server", () => {
+  test("should not use 100% CPU when websocket is idle", async () => {
+    const { stderr } = bunRun(path.join(import.meta.dir, "bun-websocket-cpu-fixture.js"));
+    expect(stderr).toBe("");
+  });
   test("normlizes incoming request URLs", async () => {
     using server = Bun.serve({
       fetch(request) {
@@ -110,7 +114,7 @@ describe("Server", () => {
           },
           port: 0,
         });
-      }).toThrow("tls option expects an object");
+      }).toThrow("TLSOptions must be an object");
     });
   });
 
@@ -125,7 +129,7 @@ describe("Server", () => {
           },
           port: 0,
         });
-      }).not.toThrow("tls option expects an object");
+      }).not.toThrow("TLSOptions must be an object");
     });
   });
 
@@ -183,31 +187,32 @@ describe("Server", () => {
 
   test("abort signal on server", async () => {
     {
-      let signalOnServer = false;
+      let abortPromise = Promise.withResolvers();
       let fetchAborted = false;
       const abortController = new AbortController();
       using server = Bun.serve({
         async fetch(req) {
           req.signal.addEventListener("abort", () => {
-            signalOnServer = true;
+            abortPromise.resolve();
           });
           abortController.abort();
-          await Bun.sleep(15);
+          await abortPromise.promise;
           return new Response("Hello");
         },
         port: 0,
       });
 
       try {
-        await fetch(`http://${server.hostname}:${server.port}`, { signal: abortController.signal });
+        await fetch(`http://${server.hostname}:${server.port}`, { signal: abortController.signal }).then(res =>
+          res.text(),
+        );
       } catch (err: any) {
         expect(err).toBeDefined();
         expect(err?.name).toBe("AbortError");
         fetchAborted = true;
       }
       // wait for the server to process the abort signal, fetch may throw before the server processes the signal
-      await Bun.sleep(15);
-      expect(signalOnServer).toBe(true);
+      await abortPromise.promise;
       expect(fetchAborted).toBe(true);
     }
   });
@@ -229,7 +234,9 @@ describe("Server", () => {
       });
 
       try {
-        await fetch(`http://${server.hostname}:${server.port}`, { signal: abortController.signal });
+        await fetch(`http://${server.hostname}:${server.port}`, { signal: abortController.signal }).then(res =>
+          res.text(),
+        );
       } catch {
         fetchAborted = true;
       }
@@ -278,7 +285,9 @@ describe("Server", () => {
       });
 
       try {
-        await fetch(`http://${server.hostname}:${server.port}`, { signal: abortController.signal });
+        await fetch(`http://${server.hostname}:${server.port}`, { signal: abortController.signal }).then(res =>
+          res.text(),
+        );
       } catch {}
       await Bun.sleep(10);
       expect(signalOnServer).toBe(true);
@@ -374,7 +383,9 @@ describe("Server", () => {
       });
 
       try {
-        await fetch(`http://${server.hostname}:${server.port}`, { signal: abortController.signal });
+        await fetch(`http://${server.hostname}:${server.port}`, { signal: abortController.signal }).then(res =>
+          res.text(),
+        );
       } catch {}
       await Bun.sleep(10);
       expect(signalOnServer).toBe(true);
@@ -405,10 +416,7 @@ describe("Server", () => {
 
   test("handshake failures should not impact future connections", async () => {
     using server = Bun.serve({
-      tls: {
-        cert: "-----BEGIN CERTIFICATE-----\nMIIDrzCCApegAwIBAgIUHaenuNcUAu0tjDZGpc7fK4EX78gwDQYJKoZIhvcNAQEL\nBQAwaTELMAkGA1UEBhMCVVMxCzAJBgNVBAgMAkNBMRYwFAYDVQQHDA1TYW4gRnJh\nbmNpc2NvMQ0wCwYDVQQKDARPdmVuMREwDwYDVQQLDAhUZWFtIEJ1bjETMBEGA1UE\nAwwKc2VydmVyLWJ1bjAeFw0yMzA5MDYyMzI3MzRaFw0yNTA5MDUyMzI3MzRaMGkx\nCzAJBgNVBAYTAlVTMQswCQYDVQQIDAJDQTEWMBQGA1UEBwwNU2FuIEZyYW5jaXNj\nbzENMAsGA1UECgwET3ZlbjERMA8GA1UECwwIVGVhbSBCdW4xEzARBgNVBAMMCnNl\ncnZlci1idW4wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC+7odzr3yI\nYewRNRGIubF5hzT7Bym2dDab4yhaKf5drL+rcA0J15BM8QJ9iSmL1ovg7x35Q2MB\nKw3rl/Yyy3aJS8whZTUze522El72iZbdNbS+oH6GxB2gcZB6hmUehPjHIUH4icwP\ndwVUeR6fB7vkfDddLXe0Tb4qsO1EK8H0mr5PiQSXfj39Yc1QHY7/gZ/xeSrt/6yn\n0oH9HbjF2XLSL2j6cQPKEayartHN0SwzwLi0eWSzcziVPSQV7c6Lg9UuIHbKlgOF\nzDpcp1p1lRqv2yrT25im/dS6oy9XX+p7EfZxqeqpXX2fr5WKxgnzxI3sW93PG8FU\nIDHtnUsoHX3RAgMBAAGjTzBNMCwGA1UdEQQlMCOCCWxvY2FsaG9zdIcEfwAAAYcQ\nAAAAAAAAAAAAAAAAAAAAATAdBgNVHQ4EFgQUF3y/su4J/8ScpK+rM2LwTct6EQow\nDQYJKoZIhvcNAQELBQADggEBAGWGWp59Bmrk3Gt0bidFLEbvlOgGPWCT9ZrJUjgc\nhY44E+/t4gIBdoKOSwxo1tjtz7WsC2IYReLTXh1vTsgEitk0Bf4y7P40+pBwwZwK\naeIF9+PC6ZoAkXGFRoyEalaPVQDBg/DPOMRG9OH0lKfen9OGkZxmmjRLJzbyfAhU\noI/hExIjV8vehcvaJXmkfybJDYOYkN4BCNqPQHNf87ZNdFCb9Zgxwp/Ou+47J5k4\n5plQ+K7trfKXG3ABMbOJXNt1b0sH8jnpAsyHY4DLEQqxKYADbXsr3YX/yy6c0eOo\nX2bHGD1+zGsb7lGyNyoZrCZ0233glrEM4UxmvldBcWwOWfk=\n-----END CERTIFICATE-----\n",
-        key: "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC+7odzr3yIYewR\nNRGIubF5hzT7Bym2dDab4yhaKf5drL+rcA0J15BM8QJ9iSmL1ovg7x35Q2MBKw3r\nl/Yyy3aJS8whZTUze522El72iZbdNbS+oH6GxB2gcZB6hmUehPjHIUH4icwPdwVU\neR6fB7vkfDddLXe0Tb4qsO1EK8H0mr5PiQSXfj39Yc1QHY7/gZ/xeSrt/6yn0oH9\nHbjF2XLSL2j6cQPKEayartHN0SwzwLi0eWSzcziVPSQV7c6Lg9UuIHbKlgOFzDpc\np1p1lRqv2yrT25im/dS6oy9XX+p7EfZxqeqpXX2fr5WKxgnzxI3sW93PG8FUIDHt\nnUsoHX3RAgMBAAECggEAAckMqkn+ER3c7YMsKRLc5bUE9ELe+ftUwfA6G+oXVorn\nE+uWCXGdNqI+TOZkQpurQBWn9IzTwv19QY+H740cxo0ozZVSPE4v4czIilv9XlVw\n3YCNa2uMxeqp76WMbz1xEhaFEgn6ASTVf3hxYJYKM0ljhPX8Vb8wWwlLONxr4w4X\nOnQAB5QE7i7LVRsQIpWKnGsALePeQjzhzUZDhz0UnTyGU6GfC+V+hN3RkC34A8oK\njR3/Wsjahev0Rpb+9Pbu3SgTrZTtQ+srlRrEsDG0wVqxkIk9ueSMOHlEtQ7zYZsk\nlX59Bb8LHNGQD5o+H1EDaC6OCsgzUAAJtDRZsPiZEQKBgQDs+YtVsc9RDMoC0x2y\nlVnP6IUDXt+2UXndZfJI3YS+wsfxiEkgK7G3AhjgB+C+DKEJzptVxP+212hHnXgr\n1gfW/x4g7OWBu4IxFmZ2J/Ojor+prhHJdCvD0VqnMzauzqLTe92aexiexXQGm+WW\nwRl3YZLmkft3rzs3ZPhc1G2X9QKBgQDOQq3rrxcvxSYaDZAb+6B/H7ZE4natMCiz\nLx/cWT8n+/CrJI2v3kDfdPl9yyXIOGrsqFgR3uhiUJnz+oeZFFHfYpslb8KvimHx\nKI+qcVDcprmYyXj2Lrf3fvj4pKorc+8TgOBDUpXIFhFDyM+0DmHLfq+7UqvjU9Hs\nkjER7baQ7QKBgQDTh508jU/FxWi9RL4Jnw9gaunwrEt9bxUc79dp+3J25V+c1k6Q\nDPDBr3mM4PtYKeXF30sBMKwiBf3rj0CpwI+W9ntqYIwtVbdNIfWsGtV8h9YWHG98\nJ9q5HLOS9EAnogPuS27walj7wL1k+NvjydJ1of+DGWQi3aQ6OkMIegap0QKBgBlR\nzCHLa5A8plG6an9U4z3Xubs5BZJ6//QHC+Uzu3IAFmob4Zy+Lr5/kITlpCyw6EdG\n3xDKiUJQXKW7kluzR92hMCRnVMHRvfYpoYEtydxcRxo/WS73SzQBjTSQmicdYzLE\ntkLtZ1+ZfeMRSpXy0gR198KKAnm0d2eQBqAJy0h9AoGBAM80zkd+LehBKq87Zoh7\ndtREVWslRD1C5HvFcAxYxBybcKzVpL89jIRGKB8SoZkF7edzhqvVzAMP0FFsEgCh\naClYGtO+uo+B91+5v2CCqowRJUGfbFOtCuSPR7+B3LDK8pkjK2SQ0mFPUfRA5z0z\nNVWtC0EYNBTRkqhYtqr3ZpUc\n-----END PRIVATE KEY-----\n",
-      },
+      tls,
       fetch() {
         return new Response("Hello");
       },
@@ -421,7 +429,7 @@ describe("Server", () => {
       await fetch(`http://${url}`, { tls: { rejectUnauthorized: false } });
       expect.unreachable();
     } catch (err: any) {
-      expect(err.code).toBe("ConnectionClosed");
+      expect(err.code).toBe("ECONNRESET");
     }
 
     {
@@ -1099,5 +1107,199 @@ describe("HEAD requests #15355", () => {
       expect(response.headers.get("content-length")).toBe("11");
       expect(await response.text()).toBe("");
     });
+
+    test("should allow Strict-Transport-Security", async () => {
+      using server = Bun.serve({
+        port: 0,
+        fetch(req) {
+          return new Response("Hello World", {
+            status: 200,
+            headers: { "Strict-Transport-Security": "max-age=31536000" },
+          });
+        },
+      });
+      const response = await fetch(server.url, { method: "HEAD" });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("strict-transport-security")).toBe("max-age=31536000");
+    });
   });
+});
+
+describe("websocket and routes test", () => {
+  const serverConfigurations = [
+    {
+      // main route for upgrade
+      routes: {
+        "/": (req: Request, server: Server) => {
+          if (server.upgrade(req)) return;
+          return new Response("Forbidden", { status: 403 });
+        },
+      },
+      shouldBeUpgraded: true,
+      hasPOST: false,
+      testName: "main route for upgrade",
+    },
+    {
+      // Generic route for upgrade
+      routes: {
+        "/*": (req: Request, server: Server) => {
+          if (server.upgrade(req)) return;
+          return new Response("Forbidden", { status: 403 });
+        },
+      },
+      shouldBeUpgraded: true,
+      hasPOST: false,
+      expectedPath: "/bun",
+      testName: "generic route for upgrade",
+    },
+    // GET route for upgrade
+    {
+      routes: {
+        "/ws": {
+          GET: (req: Request, server: Server) => {
+            if (server.upgrade(req)) return;
+            return new Response("Forbidden", { status: 403 });
+          },
+          POST: (req: Request) => {
+            return new Response(req.body);
+          },
+        },
+      },
+      shouldBeUpgraded: true,
+      hasPOST: true,
+      expectedPath: "/ws",
+      testName: "GET route for upgrade",
+    },
+    // POST route and fetch route for upgrade
+    {
+      routes: {
+        "/": {
+          POST: (req: Request, server: Server) => {
+            return new Response("Hello World");
+          },
+        },
+      },
+      fetch: (req: Request, server: Server) => {
+        if (server.upgrade(req)) return;
+        return new Response("Forbidden", { status: 403 });
+      },
+      shouldBeUpgraded: true,
+      hasPOST: true,
+      testName: "POST route + fetch route for upgrade",
+    },
+    // POST route for upgrade
+    {
+      routes: {
+        "/": {
+          POST: (req: Request, server: Server) => {
+            return new Response("Hello World");
+          },
+        },
+      },
+      shouldBeUpgraded: false,
+      hasPOST: true,
+      testName: "POST route for upgrade and no fetch",
+    },
+    // fetch only
+    {
+      fetch: (req: Request, server: Server) => {
+        if (server.upgrade(req)) return;
+        return new Response("Forbidden", { status: 403 });
+      },
+      shouldBeUpgraded: true,
+      hasPOST: false,
+      testName: "fetch only for upgrade",
+    },
+  ];
+  for (const config of serverConfigurations) {
+    const { routes, fetch: serverFetch, shouldBeUpgraded, hasPOST, expectedPath, testName } = config;
+    test(testName, async () => {
+      using server = Bun.serve({
+        port: 0,
+        routes,
+        fetch: serverFetch,
+        websocket: {
+          message: (ws, message) => {
+            // PING PONG
+            ws.send(`recv: ${message}`);
+          },
+        },
+      });
+
+      {
+        const { promise, resolve, reject } = Promise.withResolvers();
+        const url = new URL(server.url);
+        url.pathname = expectedPath || "/";
+        url.hostname = "127.0.0.1";
+        const ws = new WebSocket(url.toString()); // bun crashes here
+        ws.onopen = () => {
+          ws.send("Hello server");
+        };
+        ws.onmessage = event => {
+          resolve(event.data);
+          ws.close();
+        };
+        let errorFired = false;
+        ws.onerror = e => {
+          errorFired = true;
+          // Don't reject on error, we expect both error and close for failed upgrade
+        };
+        ws.onclose = event => {
+          if (!shouldBeUpgraded) {
+            // For failed upgrade, resolve with the close code
+            resolve(event.code);
+          } else {
+            reject(event.code);
+          }
+        };
+        if (shouldBeUpgraded) {
+          const result = await promise;
+          expect(result).toBe("recv: Hello server");
+        } else {
+          const result = await promise;
+          expect(errorFired).toBe(true); // Error event should fire for failed upgrade
+          expect(result).toBe(1002);
+        }
+        if (hasPOST) {
+          const result = await fetch(url, {
+            method: "POST",
+            body: "Hello World",
+          });
+          expect(result.status).toBe(200);
+          const body = await result.text();
+          expect(body).toBe("Hello World");
+        }
+      }
+    });
+  }
+});
+
+test("should be able to redirect when using empty streams #15320", async () => {
+  using server = Bun.serve({
+    port: 0,
+    websocket: void 0,
+    async fetch(req, server2) {
+      const url = new URL(req.url);
+      if (url.pathname === "/redirect") {
+        const emptyStream = new ReadableStream({
+          start(controller) {
+            // Immediately close the stream to make it empty
+            controller.close();
+          },
+        });
+
+        return new Response(emptyStream, {
+          status: 307,
+          headers: {
+            location: "/",
+          },
+        });
+      }
+
+      return new Response("Hello, World");
+    },
+  });
+
+  const response = await fetch(`http://localhost:${server.port}/redirect`);
+  expect(await response.text()).toBe("Hello, World");
 });

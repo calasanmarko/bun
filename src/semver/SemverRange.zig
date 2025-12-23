@@ -1,3 +1,5 @@
+const Range = @This();
+
 pub const Op = enum(u8) {
     unset = 0,
     eql = 1,
@@ -10,15 +12,15 @@ pub const Op = enum(u8) {
 left: Comparator = .{},
 right: Comparator = .{},
 
-pub fn format(this: Range, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+pub fn format(this: Range, writer: *std.Io.Writer) !void {
     if (this.left.op == .unset and this.right.op == .unset) {
         return;
     }
 
     if (this.right.op == .unset) {
-        try std.fmt.format(writer, "{}", .{this.left});
+        try writer.print("{}", .{this.left});
     } else {
-        try std.fmt.format(writer, "{} {}", .{ this.left, this.right });
+        try writer.print("{} {}", .{ this.left, this.right });
     }
 }
 
@@ -116,15 +118,15 @@ pub const Formatter = struct {
     buffer: []const u8,
     range: *const Range,
 
-    pub fn format(this: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(this: @This(), writer: *std.Io.Writer) !void {
         if (this.range.left.op == Op.unset and this.range.right.op == Op.unset) {
             return;
         }
 
         if (this.range.right.op == .unset) {
-            try std.fmt.format(writer, "{}", .{this.range.left.fmt(this.buffer)});
+            try writer.print("{f}", .{this.range.left.fmt(this.buffer)});
         } else {
-            try std.fmt.format(writer, "{} {}", .{ this.range.left.fmt(this.buffer), this.range.right.fmt(this.buffer) });
+            try writer.print("{f} {f}", .{ this.range.left.fmt(this.buffer), this.range.right.fmt(this.buffer) });
         }
     }
 };
@@ -145,7 +147,7 @@ pub const Comparator = struct {
         buffer: []const u8,
         comparator: *const Comparator,
 
-        pub fn format(this: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        pub fn format(this: @This(), writer: *std.Io.Writer) !void {
             if (this.comparator.op == Op.unset) {
                 return;
             }
@@ -159,7 +161,7 @@ pub const Comparator = struct {
                 .gte => try writer.writeAll(">="),
             }
 
-            try std.fmt.format(writer, "{}", .{this.comparator.version.fmt(this.buffer)});
+            try writer.print("{f}", .{this.comparator.version.fmt(this.buffer)});
         }
     };
 
@@ -226,14 +228,14 @@ pub fn satisfiesPre(range: Range, version: Version, range_buf: string, version_b
     // not, check the same with right if right exists and has prerelease.
     pre_matched.* = pre_matched.* or
         (range.left.version.tag.hasPre() and
-        version.patch == range.left.version.patch and
-        version.minor == range.left.version.minor and
-        version.major == range.left.version.major) or
+            version.patch == range.left.version.patch and
+            version.minor == range.left.version.minor and
+            version.major == range.left.version.major) or
         (has_right and
-        range.right.version.tag.hasPre() and
-        version.patch == range.right.version.patch and
-        version.minor == range.right.version.minor and
-        version.major == range.right.version.major);
+            range.right.version.tag.hasPre() and
+            version.patch == range.right.version.patch and
+            version.minor == range.right.version.minor and
+            version.major == range.right.version.major);
 
     if (!range.left.satisfies(version, range_buf, version_buf)) {
         return false;
@@ -246,28 +248,13 @@ pub fn satisfiesPre(range: Range, version: Version, range_buf: string, version_b
     return true;
 }
 
-const Range = @This();
+const string = []const u8;
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const bun = @import("root").bun;
-const string = bun.string;
-const Output = bun.Output;
-const Global = bun.Global;
+
+const bun = @import("bun");
 const Environment = bun.Environment;
-const strings = bun.strings;
-const MutableString = bun.MutableString;
-const stringZ = bun.stringZ;
-const default_allocator = bun.default_allocator;
-const C = bun.C;
-const JSC = bun.JSC;
-const IdentityContext = @import("../identity_context.zig").IdentityContext;
-const OOM = bun.OOM;
-const TruncatedPackageNameHash = bun.install.TruncatedPackageNameHash;
-const Lockfile = bun.install.Lockfile;
-const ExternalString = bun.Semver.ExternalString;
-const SlicedString = bun.Semver.SlicedString;
-const String = bun.Semver.String;
-const Version = bun.Semver.Version;
-const Query = bun.Semver.Query;
 const assert = bun.assert;
+
+const Query = bun.Semver.Query;
+const Version = bun.Semver.Version;

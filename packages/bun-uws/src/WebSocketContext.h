@@ -256,6 +256,9 @@ private:
 
             /* For whatever reason, if we already have emitted close event, do not emit it again */
             WebSocketData *webSocketData = (WebSocketData *) (us_socket_ext(SSL, s));
+            if (webSocketData->socketData && webSocketData->onSocketClosed) {
+                webSocketData->onSocketClosed(webSocketData->socketData, SSL, (us_socket_t *) s);
+            }
             if (!webSocketData->isShuttingDown) {
                 /* Emit close event */
                 auto *webSocketContextData = (WebSocketContextData<SSL, USERDATA> *) us_socket_context_ext(SSL, us_socket_context(SSL, (us_socket_t *) s));
@@ -339,7 +342,7 @@ private:
 
             /* We store old backpressure since it is unclear whether write drained anything,
              * however, in case of coming here with 0 backpressure we still need to emit drain event */
-            unsigned int backpressure = asyncSocket->getBufferedAmount();
+            size_t backpressure = asyncSocket->getBufferedAmount();
 
             /* Drain as much as possible */
             asyncSocket->write(nullptr, 0);

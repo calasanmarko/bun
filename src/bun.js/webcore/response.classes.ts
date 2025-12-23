@@ -4,6 +4,7 @@ export default [
   define({
     name: "Request",
     construct: true,
+    constructNeedsThis: true,
     finalize: true,
     final: false,
     klass: {},
@@ -12,14 +13,15 @@ export default [
     configurable: false,
     overridesToJS: true,
     memoryCost: true,
+    values: ["stream"],
     proto: {
-      text: { fn: "getText" },
-      json: { fn: "getJSON" },
-      bytes: { fn: "getBytes" },
+      text: { fn: "getText", async: true },
+      json: { fn: "getJSON", async: true },
+      bytes: { fn: "getBytes", async: true },
       body: { getter: "getBody", cache: true },
-      arrayBuffer: { fn: "getArrayBuffer" },
-      formData: { fn: "getFormData" },
-      blob: { fn: "getBlob" },
+      arrayBuffer: { fn: "getArrayBuffer", async: true },
+      formData: { fn: "getFormData", async: true },
+      blob: { fn: "getBlob", async: true },
       clone: { fn: "doClone", length: 1 },
       cache: {
         getter: "getCache",
@@ -68,7 +70,9 @@ export default [
   define({
     name: "Response",
     construct: true,
+    constructNeedsThis: true,
     finalize: true,
+    final: false,
     JSType: "0b11101110",
     configurable: false,
     estimatedSize: true,
@@ -84,6 +88,7 @@ export default [
         fn: "constructError",
       },
     },
+    values: ["stream"],
     proto: {
       url: {
         getter: "getURL",
@@ -91,13 +96,14 @@ export default [
       },
       body: { getter: "getBody", cache: true },
 
-      text: { fn: "getText" },
-      json: { fn: "getJSON" },
-      bytes: { fn: "getBytes" },
-      arrayBuffer: { fn: "getArrayBuffer" },
-      blob: { fn: "getBlob" },
+      text: { fn: "getText", async: true },
+      json: { fn: "getJSON", async: true },
+      bytes: { fn: "getBytes", async: true },
+      arrayBuffer: { fn: "getArrayBuffer", async: true },
+      blob: { fn: "getBlob", async: true },
+      formData: { fn: "getFormData", async: true },
+
       clone: { fn: "doClone", length: 1 },
-      formData: { fn: "getFormData" },
 
       type: {
         getter: "getResponseType",
@@ -132,21 +138,28 @@ export default [
     JSType: "0b11101110",
     klass: {},
     configurable: false,
-    structuredClone: { transferable: false, tag: 254 },
+    structuredClone: {
+      transferable: false,
+      tag: 254,
+
+      // TODO: fix this.
+      // We should support it unless it's a file descriptor.
+      storable: true,
+    },
     estimatedSize: true,
     values: ["stream"],
     overridesToJS: true,
     proto: {
-      text: { fn: "getText" },
-      json: { fn: "getJSON" },
-      arrayBuffer: { fn: "getArrayBuffer" },
+      text: { fn: "getText", async: true },
+      json: { fn: "getJSON", async: true },
+      arrayBuffer: { fn: "getArrayBuffer", async: true },
       slice: { fn: "getSlice", length: 2 },
       stream: { fn: "getStream", length: 1 },
-      formData: { fn: "getFormData" },
+      formData: { fn: "getFormData", async: true },
       exists: { fn: "getExists", length: 0 },
 
       // Non-standard, but consistent!
-      bytes: { fn: "getBytes" },
+      bytes: { fn: "getBytes", async: true },
 
       type: {
         getter: "getType",

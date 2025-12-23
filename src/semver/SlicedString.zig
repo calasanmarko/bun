@@ -1,3 +1,5 @@
+const SlicedString = @This();
+
 buf: string,
 slice: string,
 
@@ -28,31 +30,24 @@ pub inline fn value(this: SlicedString) String {
 
 pub inline fn sub(this: SlicedString, input: string) SlicedString {
     if (Environment.allow_assert) {
-        if (!(@intFromPtr(this.buf.ptr) <= @intFromPtr(this.buf.ptr) and ((@intFromPtr(input.ptr) + input.len) <= (@intFromPtr(this.buf.ptr) + this.buf.len)))) {
-            @panic("SlicedString.sub input is not a substring of the slice");
+        if (!bun.isSliceInBuffer(input, this.buf)) {
+            const start_buf = @intFromPtr(this.buf.ptr);
+            const end_buf = @intFromPtr(this.buf.ptr) + this.buf.len;
+            const start_i = @intFromPtr(input.ptr);
+            const end_i = @intFromPtr(input.ptr) + input.len;
+
+            bun.Output.panic("SlicedString.sub input [{}, {}) is not a substring of the " ++
+                "slice [{}, {})", .{ start_i, end_i, start_buf, end_buf });
         }
     }
     return SlicedString{ .buf = this.buf, .slice = input };
 }
 
-const SlicedString = @This();
-const assert = bun.assert;
-const std = @import("std");
-const Allocator = std.mem.Allocator;
-const bun = @import("root").bun;
-const string = bun.string;
-const Output = bun.Output;
-const Global = bun.Global;
+const string = []const u8;
+
+const bun = @import("bun");
 const Environment = bun.Environment;
-const strings = bun.strings;
-const MutableString = bun.MutableString;
-const stringZ = bun.stringZ;
-const default_allocator = bun.default_allocator;
-const C = bun.C;
-const JSC = bun.JSC;
-const IdentityContext = bun.IdentityContext;
-const OOM = bun.OOM;
-const TruncatedPackageNameHash = bun.install.TruncatedPackageNameHash;
-const Lockfile = bun.install.Lockfile;
+const assert = bun.assert;
+
 const ExternalString = bun.Semver.ExternalString;
 const String = bun.Semver.String;

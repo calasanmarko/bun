@@ -1,40 +1,15 @@
-const std = @import("std");
-const bun = @import("root").bun;
-const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayListUnmanaged;
-
 pub const css = @import("../css_parser.zig");
 
-const SmallList = css.SmallList;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
 const Result = css.Result;
 const VendorPrefix = css.VendorPrefix;
-const PropertyId = css.css_properties.PropertyId;
 const Property = css.css_properties.Property;
 
-const ContainerName = css.css_rules.container.ContainerName;
-
 const LengthPercentage = css.css_values.length.LengthPercentage;
-const CustomIdent = css.css_values.ident.CustomIdent;
-const CSSString = css.css_values.string.CSSString;
-const CSSNumber = css.css_values.number.CSSNumber;
-const LengthPercentageOrAuto = css.css_values.length.LengthPercentageOrAuto;
-const Size2D = css.css_values.size.Size2D;
-const DashedIdent = css.css_values.ident.DashedIdent;
-const Image = css.css_values.image.Image;
-const CssColor = css.css_values.color.CssColor;
-const Ratio = css.css_values.ratio.Ratio;
 const Length = css.css_values.length.LengthValue;
-const Rect = css.css_values.rect.Rect;
 const NumberOrPercentage = css.css_values.percentage.NumberOrPercentage;
-const CustomIdentList = css.css_values.ident.CustomIdentList;
 const Angle = css.css_values.angle.Angle;
-const Url = css.css_values.url.Url;
-const Percentage = css.css_values.percentage.Percentage;
-
-const GenericBorder = css.css_properties.border.GenericBorder;
-const LineStyle = css.css_properties.border.LineStyle;
 
 /// A value for the [transform](https://www.w3.org/TR/2019/CR-css-transforms-1-20190214/#propdef-transform) property.
 pub const TransformList = struct {
@@ -48,21 +23,21 @@ pub const TransformList = struct {
         input.skipWhitespace();
         var results = ArrayList(Transform){};
         switch (Transform.parse(input)) {
-            .result => |first| results.append(input.allocator(), first) catch bun.outOfMemory(),
+            .result => |first| bun.handleOom(results.append(input.allocator(), first)),
             .err => |e| return .{ .err = e },
         }
 
         while (true) {
             input.skipWhitespace();
             if (input.tryParse(Transform.parse, .{}).asValue()) |item| {
-                results.append(input.allocator(), item) catch bun.outOfMemory();
+                bun.handleOom(results.append(input.allocator(), item));
             } else {
                 return .{ .result = .{ .v = results } };
             }
         }
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *Printer) PrintErr!void {
         if (this.v.items.len == 0) {
             return dest.writeStr("none");
         }
@@ -70,32 +45,33 @@ pub const TransformList = struct {
         // TODO: Re-enable with a better solution
         //       See: https://github.com/parcel-bundler/lightningcss/issues/288
         if (dest.minify) {
-            var base = ArrayList(u8){};
-            const base_writer = base.writer(dest.allocator);
-            const WW = @TypeOf(base_writer);
+            var base = std.Io.Writer.Allocating.init(dest.allocator);
+            const base_writer = &base.writer;
 
-            var scratchbuf = std.ArrayList(u8).init(dest.allocator);
+            var scratchbuf = std.array_list.Managed(u8).init(dest.allocator);
             defer scratchbuf.deinit();
-            var p = Printer(WW).new(
+            var p = Printer.new(
                 dest.allocator,
                 scratchbuf,
                 base_writer,
                 css.PrinterOptions.defaultWithMinify(true),
                 dest.import_info,
+                dest.local_names,
+                dest.symbols,
             );
             defer p.deinit();
 
-            try this.toCssBase(WW, &p);
+            try this.toCssBase(&p);
 
-            return dest.writeStr(base.items);
+            return dest.writeStr(base.written());
         }
 
-        return this.toCssBase(W, dest);
+        return this.toCssBase(dest);
     }
 
-    fn toCssBase(this: *const @This(), comptime W: type, dest: *Printer(W)) PrintErr!void {
+    fn toCssBase(this: *const @This(), dest: *Printer) PrintErr!void {
         for (this.v.items) |*item| {
-            try item.toCss(W, dest);
+            try item.toCss(dest);
         }
     }
 
@@ -558,59 +534,59 @@ pub const Transform = union(enum) {
         );
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *Printer) PrintErr!void {
         switch (this.*) {
             .translate => |t| {
                 if (dest.minify and t.x.isZero() and !t.y.isZero()) {
                     try dest.writeStr("translateY(");
-                    try t.y.toCss(W, dest);
+                    try t.y.toCss(dest);
                 } else {
                     try dest.writeStr("translate(");
-                    try t.x.toCss(W, dest);
+                    try t.x.toCss(dest);
                     if (!t.y.isZero()) {
                         try dest.delim(',', false);
-                        try t.y.toCss(W, dest);
+                        try t.y.toCss(dest);
                     }
                 }
                 try dest.writeChar(')');
             },
             .translate_x => |x| {
                 try dest.writeStr(if (dest.minify) "translate(" else "translateX(");
-                try x.toCss(W, dest);
+                try x.toCss(dest);
                 try dest.writeChar(')');
             },
             .translate_y => |y| {
                 try dest.writeStr("translateY(");
-                try y.toCss(W, dest);
+                try y.toCss(dest);
                 try dest.writeChar(')');
             },
             .translate_z => |z| {
                 try dest.writeStr("translateZ(");
-                try z.toCss(W, dest);
+                try z.toCss(dest);
                 try dest.writeChar(')');
             },
             .translate_3d => |t| {
                 if (dest.minify and !t.x.isZero() and t.y.isZero() and t.z.isZero()) {
                     try dest.writeStr("translate(");
-                    try t.x.toCss(W, dest);
+                    try t.x.toCss(dest);
                 } else if (dest.minify and t.x.isZero() and !t.y.isZero() and t.z.isZero()) {
                     try dest.writeStr("translateY(");
-                    try t.y.toCss(W, dest);
+                    try t.y.toCss(dest);
                 } else if (dest.minify and t.x.isZero() and t.y.isZero() and !t.z.isZero()) {
                     try dest.writeStr("translateZ(");
-                    try t.z.toCss(W, dest);
+                    try t.z.toCss(dest);
                 } else if (dest.minify and t.z.isZero()) {
                     try dest.writeStr("translate(");
-                    try t.x.toCss(W, dest);
+                    try t.x.toCss(dest);
                     try dest.delim(',', false);
-                    try t.y.toCss(W, dest);
+                    try t.y.toCss(dest);
                 } else {
                     try dest.writeStr("translate3d(");
-                    try t.x.toCss(W, dest);
+                    try t.x.toCss(dest);
                     try dest.delim(',', false);
-                    try t.y.toCss(W, dest);
+                    try t.y.toCss(dest);
                     try dest.delim(',', false);
-                    try t.z.toCss(W, dest);
+                    try t.z.toCss(dest);
                 }
                 try dest.writeChar(')');
             },
@@ -619,33 +595,33 @@ pub const Transform = union(enum) {
                 const y: f32 = s.y.intoF32();
                 if (dest.minify and x == 1.0 and y != 1.0) {
                     try dest.writeStr("scaleY(");
-                    try css.CSSNumberFns.toCss(&y, W, dest);
+                    try css.CSSNumberFns.toCss(&y, dest);
                 } else if (dest.minify and x != 1.0 and y == 1.0) {
                     try dest.writeStr("scaleX(");
-                    try css.CSSNumberFns.toCss(&x, W, dest);
+                    try css.CSSNumberFns.toCss(&x, dest);
                 } else {
                     try dest.writeStr("scale(");
-                    try css.CSSNumberFns.toCss(&x, W, dest);
+                    try css.CSSNumberFns.toCss(&x, dest);
                     if (y != x) {
                         try dest.delim(',', false);
-                        try css.CSSNumberFns.toCss(&y, W, dest);
+                        try css.CSSNumberFns.toCss(&y, dest);
                     }
                 }
                 try dest.writeChar(')');
             },
             .scale_x => |x| {
                 try dest.writeStr("scaleX(");
-                try css.CSSNumberFns.toCss(&x.intoF32(), W, dest);
+                try css.CSSNumberFns.toCss(&x.intoF32(), dest);
                 try dest.writeChar(')');
             },
             .scale_y => |y| {
                 try dest.writeStr("scaleY(");
-                try css.CSSNumberFns.toCss(&y.intoF32(), W, dest);
+                try css.CSSNumberFns.toCss(&y.intoF32(), dest);
                 try dest.writeChar(')');
             },
             .scale_z => |z| {
                 try dest.writeStr("scaleZ(");
-                try css.CSSNumberFns.toCss(&z.intoF32(), W, dest);
+                try css.CSSNumberFns.toCss(&z.intoF32(), dest);
                 try dest.writeChar(')');
             },
             .scale_3d => |s| {
@@ -654,150 +630,150 @@ pub const Transform = union(enum) {
                 const z: f32 = s.z.intoF32();
                 if (dest.minify and z == 1.0 and x == y) {
                     try dest.writeStr("scale(");
-                    try css.CSSNumberFns.toCss(&x, W, dest);
+                    try css.CSSNumberFns.toCss(&x, dest);
                 } else if (dest.minify and x != 1.0 and y == 1.0 and z == 1.0) {
                     try dest.writeStr("scaleX(");
-                    try css.CSSNumberFns.toCss(&x, W, dest);
+                    try css.CSSNumberFns.toCss(&x, dest);
                 } else if (dest.minify and x == 1.0 and y != 1.0 and z == 1.0) {
                     try dest.writeStr("scaleY(");
-                    try css.CSSNumberFns.toCss(&y, W, dest);
+                    try css.CSSNumberFns.toCss(&y, dest);
                 } else if (dest.minify and x == 1.0 and y == 1.0 and z != 1.0) {
                     try dest.writeStr("scaleZ(");
-                    try css.CSSNumberFns.toCss(&z, W, dest);
+                    try css.CSSNumberFns.toCss(&z, dest);
                 } else if (dest.minify and z == 1.0) {
                     try dest.writeStr("scale(");
-                    try css.CSSNumberFns.toCss(&x, W, dest);
+                    try css.CSSNumberFns.toCss(&x, dest);
                     try dest.delim(',', false);
-                    try css.CSSNumberFns.toCss(&y, W, dest);
+                    try css.CSSNumberFns.toCss(&y, dest);
                 } else {
                     try dest.writeStr("scale3d(");
-                    try css.CSSNumberFns.toCss(&x, W, dest);
+                    try css.CSSNumberFns.toCss(&x, dest);
                     try dest.delim(',', false);
-                    try css.CSSNumberFns.toCss(&y, W, dest);
+                    try css.CSSNumberFns.toCss(&y, dest);
                     try dest.delim(',', false);
-                    try css.CSSNumberFns.toCss(&z, W, dest);
+                    try css.CSSNumberFns.toCss(&z, dest);
                 }
                 try dest.writeChar(')');
             },
             .rotate => |angle| {
                 try dest.writeStr("rotate(");
-                try angle.toCssWithUnitlessZero(W, dest);
+                try angle.toCssWithUnitlessZero(dest);
                 try dest.writeChar(')');
             },
             .rotate_x => |angle| {
                 try dest.writeStr("rotateX(");
-                try angle.toCssWithUnitlessZero(W, dest);
+                try angle.toCssWithUnitlessZero(dest);
                 try dest.writeChar(')');
             },
             .rotate_y => |angle| {
                 try dest.writeStr("rotateY(");
-                try angle.toCssWithUnitlessZero(W, dest);
+                try angle.toCssWithUnitlessZero(dest);
                 try dest.writeChar(')');
             },
             .rotate_z => |angle| {
                 try dest.writeStr(if (dest.minify) "rotate(" else "rotateZ(");
-                try angle.toCssWithUnitlessZero(W, dest);
+                try angle.toCssWithUnitlessZero(dest);
                 try dest.writeChar(')');
             },
             .rotate_3d => |r| {
                 if (dest.minify and r.x == 1.0 and r.y == 0.0 and r.z == 0.0) {
                     try dest.writeStr("rotateX(");
-                    try r.angle.toCssWithUnitlessZero(W, dest);
+                    try r.angle.toCssWithUnitlessZero(dest);
                 } else if (dest.minify and r.x == 0.0 and r.y == 1.0 and r.z == 0.0) {
                     try dest.writeStr("rotateY(");
-                    try r.angle.toCssWithUnitlessZero(W, dest);
+                    try r.angle.toCssWithUnitlessZero(dest);
                 } else if (dest.minify and r.x == 0.0 and r.y == 0.0 and r.z == 1.0) {
                     try dest.writeStr("rotate(");
-                    try r.angle.toCssWithUnitlessZero(W, dest);
+                    try r.angle.toCssWithUnitlessZero(dest);
                 } else {
                     try dest.writeStr("rotate3d(");
-                    try css.CSSNumberFns.toCss(&r.x, W, dest);
+                    try css.CSSNumberFns.toCss(&r.x, dest);
                     try dest.delim(',', false);
-                    try css.CSSNumberFns.toCss(&r.y, W, dest);
+                    try css.CSSNumberFns.toCss(&r.y, dest);
                     try dest.delim(',', false);
-                    try css.CSSNumberFns.toCss(&r.z, W, dest);
+                    try css.CSSNumberFns.toCss(&r.z, dest);
                     try dest.delim(',', false);
-                    try r.angle.toCssWithUnitlessZero(W, dest);
+                    try r.angle.toCssWithUnitlessZero(dest);
                 }
                 try dest.writeChar(')');
             },
             .skew => |s| {
                 if (dest.minify and s.x.isZero() and !s.y.isZero()) {
                     try dest.writeStr("skewY(");
-                    try s.y.toCssWithUnitlessZero(W, dest);
+                    try s.y.toCssWithUnitlessZero(dest);
                 } else {
                     try dest.writeStr("skew(");
-                    try s.x.toCss(W, dest);
+                    try s.x.toCss(dest);
                     if (!s.y.isZero()) {
                         try dest.delim(',', false);
-                        try s.y.toCssWithUnitlessZero(W, dest);
+                        try s.y.toCssWithUnitlessZero(dest);
                     }
                 }
                 try dest.writeChar(')');
             },
             .skew_x => |angle| {
                 try dest.writeStr(if (dest.minify) "skew(" else "skewX(");
-                try angle.toCssWithUnitlessZero(W, dest);
+                try angle.toCssWithUnitlessZero(dest);
                 try dest.writeChar(')');
             },
             .skew_y => |angle| {
                 try dest.writeStr("skewY(");
-                try angle.toCssWithUnitlessZero(W, dest);
+                try angle.toCssWithUnitlessZero(dest);
                 try dest.writeChar(')');
             },
             .perspective => |len| {
                 try dest.writeStr("perspective(");
-                try len.toCss(W, dest);
+                try len.toCss(dest);
                 try dest.writeChar(')');
             },
             .matrix => |m| {
                 try dest.writeStr("matrix(");
-                try css.CSSNumberFns.toCss(&m.a, W, dest);
+                try css.CSSNumberFns.toCss(&m.a, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.b, W, dest);
+                try css.CSSNumberFns.toCss(&m.b, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.c, W, dest);
+                try css.CSSNumberFns.toCss(&m.c, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.d, W, dest);
+                try css.CSSNumberFns.toCss(&m.d, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.e, W, dest);
+                try css.CSSNumberFns.toCss(&m.e, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.f, W, dest);
+                try css.CSSNumberFns.toCss(&m.f, dest);
                 try dest.writeChar(')');
             },
             .matrix_3d => |m| {
                 try dest.writeStr("matrix3d(");
-                try css.CSSNumberFns.toCss(&m.m11, W, dest);
+                try css.CSSNumberFns.toCss(&m.m11, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m12, W, dest);
+                try css.CSSNumberFns.toCss(&m.m12, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m13, W, dest);
+                try css.CSSNumberFns.toCss(&m.m13, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m14, W, dest);
+                try css.CSSNumberFns.toCss(&m.m14, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m21, W, dest);
+                try css.CSSNumberFns.toCss(&m.m21, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m22, W, dest);
+                try css.CSSNumberFns.toCss(&m.m22, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m23, W, dest);
+                try css.CSSNumberFns.toCss(&m.m23, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m24, W, dest);
+                try css.CSSNumberFns.toCss(&m.m24, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m31, W, dest);
+                try css.CSSNumberFns.toCss(&m.m31, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m32, W, dest);
+                try css.CSSNumberFns.toCss(&m.m32, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m33, W, dest);
+                try css.CSSNumberFns.toCss(&m.m33, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m34, W, dest);
+                try css.CSSNumberFns.toCss(&m.m34, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m41, W, dest);
+                try css.CSSNumberFns.toCss(&m.m41, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m42, W, dest);
+                try css.CSSNumberFns.toCss(&m.m42, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m43, W, dest);
+                try css.CSSNumberFns.toCss(&m.m43, dest);
                 try dest.delim(',', false);
-                try css.CSSNumberFns.toCss(&m.m44, W, dest);
+                try css.CSSNumberFns.toCss(&m.m44, dest);
                 try dest.writeChar(')');
             },
         }
@@ -862,7 +838,12 @@ pub fn Matrix3d(comptime T: type) type {
 pub const TransformStyle = enum {
     flat,
     @"preserve-3d",
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 /// A value for the [transform-box](https://drafts.csswg.org/css-transforms-1/#transform-box) property.
@@ -878,7 +859,12 @@ pub const TransformBox = enum {
     /// Uses the nearest SVG viewport as reference box.
     @"view-box",
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 /// A value for the [backface-visibility](https://drafts.csswg.org/css-transforms-2/#backface-visibility-property) property.
@@ -886,7 +872,12 @@ pub const BackfaceVisibility = enum {
     visible,
     hidden,
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 /// A value for the perspective property.
@@ -896,8 +887,8 @@ pub const Perspective = union(enum) {
     /// Distance to the center of projection.
     length: Length,
 
-    pub usingnamespace css.DeriveParse(@This());
-    pub usingnamespace css.DeriveToCss(@This());
+    pub const parse = css.DeriveParse(@This()).parse;
+    pub const toCss = css.DeriveToCss(@This()).toCss;
 
     pub fn eql(this: *const @This(), other: *const @This()) bool {
         return css.implementEql(@This(), this, other);
@@ -952,17 +943,17 @@ pub const Translate = union(enum) {
         };
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *css.Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *css.Printer) PrintErr!void {
         switch (this.*) {
             .none => try dest.writeStr("none"),
             .xyz => |xyz| {
-                try xyz.x.toCss(W, dest);
+                try xyz.x.toCss(dest);
                 if (!xyz.y.isZero() or !xyz.z.isZero()) {
                     try dest.writeChar(' ');
-                    try xyz.y.toCss(W, dest);
+                    try xyz.y.toCss(dest);
                     if (!xyz.z.isZero()) {
                         try dest.writeChar(' ');
-                        try xyz.z.toCss(W, dest);
+                        try xyz.z.toCss(dest);
                     }
                 }
             },
@@ -1071,7 +1062,7 @@ pub const Rotate = struct {
         } };
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *css.Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *css.Printer) PrintErr!void {
         if (this.x == 0.0 and this.y == 0.0 and this.z == 1.0 and this.angle.isZero()) {
             try dest.writeStr("none");
             return;
@@ -1082,15 +1073,15 @@ pub const Rotate = struct {
         } else if (this.x == 0.0 and this.y == 1.0 and this.z == 0.0) {
             try dest.writeStr("y ");
         } else if (!(this.x == 0.0 and this.y == 0.0 and this.z == 1.0)) {
-            try css.CSSNumberFns.toCss(&this.x, W, dest);
+            try css.CSSNumberFns.toCss(&this.x, dest);
             try dest.writeChar(' ');
-            try css.CSSNumberFns.toCss(&this.y, W, dest);
+            try css.CSSNumberFns.toCss(&this.y, dest);
             try dest.writeChar(' ');
-            try css.CSSNumberFns.toCss(&this.z, W, dest);
+            try css.CSSNumberFns.toCss(&this.z, dest);
             try dest.writeChar(' ');
         }
 
-        try this.angle.toCss(W, dest);
+        try this.angle.toCss(dest);
     }
 
     /// Converts the rotation to a transform function.
@@ -1153,18 +1144,18 @@ pub const Scale = union(enum) {
         } } };
     }
 
-    pub fn toCss(this: *const @This(), comptime W: type, dest: *css.Printer(W)) PrintErr!void {
+    pub fn toCss(this: *const @This(), dest: *css.Printer) PrintErr!void {
         switch (this.*) {
             .none => try dest.writeStr("none"),
             .xyz => |xyz| {
-                try xyz.x.toCss(W, dest);
+                try xyz.x.toCss(dest);
                 const z_val = xyz.z.intoF32();
                 if (!xyz.y.eql(&xyz.x) or z_val != 1.0) {
                     try dest.writeChar(' ');
-                    try xyz.y.toCss(W, dest);
+                    try xyz.y.toCss(dest);
                     if (z_val != 1.0) {
                         try dest.writeChar(' ');
-                        try xyz.z.toCss(W, dest);
+                        try xyz.z.toCss(dest);
                     }
                 }
             },
@@ -1211,7 +1202,7 @@ pub const TransformHandler = struct {
         const individualProperty = struct {
             fn individualProperty(self: *TransformHandler, allocator: std.mem.Allocator, comptime field: []const u8, val: anytype) void {
                 if (self.transform) |*transform| {
-                    transform.*[0].v.append(allocator, val.toTransform(allocator)) catch bun.outOfMemory();
+                    bun.handleOom(transform.*[0].v.append(allocator, val.toTransform(allocator)));
                 } else {
                     @field(self, field) = val.deepClone(allocator);
                     self.has_any = true;
@@ -1228,14 +1219,14 @@ pub const TransformHandler = struct {
                 // If two vendor prefixes for the same property have different
                 // values, we need to flush what we have immediately to preserve order.
                 if (this.transform) |current| {
-                    if (!current[0].eql(&transform_val) and !current[1].contains(vp)) {
+                    if (!current[0].eql(&transform_val) and !bun.bits.contains(css.VendorPrefix, current[1], vp)) {
                         this.flush(allocator, dest, context);
                     }
                 }
 
                 // Otherwise, update the value and add the prefix.
                 if (this.transform) |*transform| {
-                    transform.* = .{ transform_val.deepClone(allocator), transform.*[1].bitwiseOr(vp) };
+                    transform.* = .{ transform_val.deepClone(allocator), bun.bits.@"or"(css.VendorPrefix, transform.*[1], vp) };
                 } else {
                     this.transform = .{ transform_val.deepClone(allocator), vp };
                     this.has_any = true;
@@ -1259,7 +1250,7 @@ pub const TransformHandler = struct {
                         Property{ .unparsed = unparsed.getPrefixed(allocator, context.targets, css.prefixes.Feature.transform) }
                     else
                         property.deepClone(allocator);
-                    dest.append(allocator, prop) catch bun.outOfMemory();
+                    bun.handleOom(dest.append(allocator, prop));
                 } else return false;
             },
             else => return false,
@@ -1284,19 +1275,25 @@ pub const TransformHandler = struct {
 
         if (transform) |t| {
             const prefix = context.targets.prefixes(t[1], css.prefixes.Feature.transform);
-            dest.append(allocator, Property{ .transform = .{ t[0], prefix } }) catch bun.outOfMemory();
+            bun.handleOom(dest.append(allocator, Property{ .transform = .{ t[0], prefix } }));
         }
 
         if (translate) |t| {
-            dest.append(allocator, Property{ .translate = t }) catch bun.outOfMemory();
+            bun.handleOom(dest.append(allocator, Property{ .translate = t }));
         }
 
         if (rotate) |r| {
-            dest.append(allocator, Property{ .rotate = r }) catch bun.outOfMemory();
+            bun.handleOom(dest.append(allocator, Property{ .rotate = r }));
         }
 
         if (scale) |s| {
-            dest.append(allocator, Property{ .scale = s }) catch bun.outOfMemory();
+            bun.handleOom(dest.append(allocator, Property{ .scale = s }));
         }
     }
 };
+
+const bun = @import("bun");
+
+const std = @import("std");
+const ArrayList = std.ArrayListUnmanaged;
+const Allocator = std.mem.Allocator;

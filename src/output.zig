@@ -1,18 +1,3 @@
-const bun = @import("root").bun;
-const std = @import("std");
-const Environment = @import("./env.zig");
-const string = bun.string;
-const root = @import("root");
-const strings = bun.strings;
-const StringTypes = bun.StringTypes;
-const Global = bun.Global;
-const ComptimeStringMap = bun.ComptimeStringMap;
-const use_mimalloc = bun.use_mimalloc;
-const writeStream = std.json.writeStream;
-const WriteStream = std.json.WriteStream;
-
-const SystemTimer = @import("./system_timer.zig").Timer;
-
 // These are threadlocal so we don't have stdout/stderr writing on top of each other
 threadlocal var source: Source = undefined;
 threadlocal var source_set: bool = false;
@@ -21,12 +6,15 @@ threadlocal var source_set: bool = false;
 var stderr_stream: Source.StreamType = undefined;
 var stdout_stream: Source.StreamType = undefined;
 var stdout_stream_set = false;
-const File = bun.sys.File;
+
+// Track which stdio descriptors are TTYs (0=stdin, 1=stdout, 2=stderr)
+pub export var bun_stdio_tty: [3]i32 = .{ 0, 0, 0 };
+
 pub var terminal_size: std.posix.winsize = .{
-    .ws_row = 0,
-    .ws_col = 0,
-    .ws_xpixel = 0,
-    .ws_ypixel = 0,
+    .row = 0,
+    .col = 0,
+    .xpixel = 0,
+    .ypixel = 0,
 };
 
 pub const Source = struct {
@@ -35,93 +23,95 @@ pub const Source = struct {
             break :brk std.io.FixedBufferStream([]u8);
         } else {
             break :brk File;
-            // var stdout = std.io.getStdOut();
-            // return @TypeOf(std.io.bufferedWriter(stdout.writer()));
+            // var stdout = std.fs.File.stdout();
+            // return @TypeOf(bun.deprecated.bufferedWriter(stdout.writer()));
         }
     };
-    pub const BufferedStream: type = struct {
-        fn getBufferedStream() type {
-            if (comptime Environment.isWasm)
-                return StreamType;
 
-            return std.io.BufferedWriter(4096, @TypeOf(StreamType.quietWriter(undefined)));
-        }
-    }.getBufferedStream();
+    stdout_buffer: [4096]u8,
+    stderr_buffer: [4096]u8,
+    buffered_stream_backing: @TypeOf(StreamType.quietWriter(undefined)).Adapter,
+    buffered_error_stream_backing: @TypeOf(StreamType.quietWriter(undefined)).Adapter,
+    buffered_stream: *std.Io.Writer,
+    buffered_error_stream: *std.Io.Writer,
 
-    buffered_stream: BufferedStream,
-    buffered_error_stream: BufferedStream,
+    stream_backing: @TypeOf(StreamType.quietWriter(undefined)).Adapter,
+    error_stream_backing: @TypeOf(StreamType.quietWriter(undefined)).Adapter,
+    stream: *std.Io.Writer,
+    error_stream: *std.Io.Writer,
 
-    stream: StreamType,
-    error_stream: StreamType,
+    raw_stream: StreamType,
+    raw_error_stream: StreamType,
     out_buffer: []u8 = &([_]u8{}),
     err_buffer: []u8 = &([_]u8{}),
 
     pub fn init(
+        out: *Source,
         stream: StreamType,
         err_stream: StreamType,
-    ) Source {
-        if (comptime Environment.isDebug) {
-            if (comptime use_mimalloc) {
-                if (!source_set) {
-                    const Mimalloc = @import("./allocators/mimalloc.zig");
-                    Mimalloc.mi_option_set(.show_errors, 1);
-                }
-            }
+    ) void {
+        if ((comptime Environment.isDebug and use_mimalloc) and !source_set) {
+            bun.mimalloc.mi_option_set(.show_errors, 1);
         }
         source_set = true;
 
-        return Source{
-            .stream = stream,
-            .error_stream = err_stream,
-            .buffered_stream = if (Environment.isNative)
-                BufferedStream{ .unbuffered_writer = stream.quietWriter() }
-            else
-                stream,
-            .buffered_error_stream = if (Environment.isNative)
-                BufferedStream{ .unbuffered_writer = err_stream.quietWriter() }
-            else
-                err_stream,
+        out.* = .{
+            .raw_stream = stream,
+            .raw_error_stream = err_stream,
+
+            .stdout_buffer = undefined,
+            .stderr_buffer = undefined,
+            .buffered_stream = undefined,
+            .buffered_stream_backing = undefined,
+            .buffered_error_stream_backing = undefined,
+            .buffered_error_stream = undefined,
+
+            .stream_backing = undefined,
+            .error_stream_backing = undefined,
+            .stream = undefined,
+            .error_stream = undefined,
         };
+
+        out.buffered_stream_backing = out.raw_stream.quietWriter().adaptToNewApi(&out.stdout_buffer);
+        out.buffered_error_stream_backing = out.raw_error_stream.quietWriter().adaptToNewApi(&out.stderr_buffer);
+        out.buffered_stream = &out.buffered_stream_backing.new_interface;
+        out.buffered_error_stream = &out.buffered_error_stream_backing.new_interface;
+
+        out.stream_backing = out.raw_stream.quietWriter().adaptToNewApi(&.{});
+        out.error_stream_backing = out.raw_error_stream.quietWriter().adaptToNewApi(&.{});
+        out.stream = &out.stream_backing.new_interface;
+        out.error_stream = &out.error_stream_backing.new_interface;
     }
 
     pub fn configureThread() void {
         if (source_set) return;
         bun.debugAssert(stdout_stream_set);
-        source = Source.init(stdout_stream, stderr_stream);
+        source.init(stdout_stream, stderr_stream);
         bun.StackCheck.configureThread();
     }
 
-    pub fn configureNamedThread(name: StringTypes.stringZ) void {
+    pub fn configureNamedThread(name: [:0]const u8) void {
         Global.setThreadName(name);
         configureThread();
     }
 
     pub fn isNoColor() bool {
-        const no_color = bun.getenvZ("NO_COLOR") orelse return false;
-        // https://no-color.org/
-        // "when present and not an empty string (regardless of its value)"
-        return no_color.len != 0;
+        return bun.env_var.NO_COLOR.get();
     }
 
     pub fn getForceColorDepth() ?ColorDepth {
-        const force_color = bun.getenvZ("FORCE_COLOR") orelse return null;
+        const force_color = bun.env_var.FORCE_COLOR.get() orelse return null;
         // Supported by Node.js, if set will ignore NO_COLOR.
         // - "0" to indicate no color support
         // - "1", "true", or "" to indicate 16-color support
         // - "2" to indicate 256-color support
         // - "3" to indicate 16 million-color support
-        if (strings.eqlComptime(force_color, "1") or strings.eqlComptime(force_color, "true") or strings.eqlComptime(force_color, "")) {
-            return ColorDepth.@"16";
-        }
-
-        if (strings.eqlComptime(force_color, "2")) {
-            return ColorDepth.@"256";
-        }
-        if (strings.eqlComptime(force_color, "3")) {
-            return ColorDepth.@"16m";
-        }
-
-        return ColorDepth.none;
+        return switch (force_color) {
+            0 => .none,
+            1 => .@"16",
+            2 => .@"256",
+            else => .@"16m",
+        };
     }
 
     pub fn isForceColor() bool {
@@ -140,8 +130,6 @@ pub const Source = struct {
         return colorDepth() != .none;
     }
 
-    export var bun_stdio_tty: [3]i32 = .{ 0, 0, 0 };
-
     const WindowsStdio = struct {
         const w = bun.windows;
 
@@ -152,7 +140,7 @@ pub const Source = struct {
         pub var console_codepage = @as(u32, 0);
         pub var console_output_codepage = @as(u32, 0);
 
-        pub export fn Bun__restoreWindowsStdio() callconv(.C) void {
+        pub export fn Bun__restoreWindowsStdio() callconv(.c) void {
             restore();
         }
         comptime {
@@ -170,15 +158,15 @@ pub const Source = struct {
             const handles = &.{ &stdin, &stdout, &stderr };
             inline for (console_mode, handles) |mode, handle| {
                 if (mode) |m| {
-                    _ = w.SetConsoleMode(handle.*, m);
+                    _ = c.SetConsoleMode(handle.*, m);
                 }
             }
 
             if (console_output_codepage != 0)
-                _ = w.kernel32.SetConsoleOutputCP(console_output_codepage);
+                _ = c.SetConsoleOutputCP(console_output_codepage);
 
             if (console_codepage != 0)
-                _ = w.SetConsoleCP(console_codepage);
+                _ = c.SetConsoleCP(console_codepage);
         }
 
         pub fn init() void {
@@ -188,22 +176,25 @@ pub const Source = struct {
             const stdout = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch w.INVALID_HANDLE_VALUE;
             const stderr = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch w.INVALID_HANDLE_VALUE;
 
-            bun.win32.STDERR_FD = if (stderr != std.os.windows.INVALID_HANDLE_VALUE) bun.toFD(stderr) else bun.invalid_fd;
-            bun.win32.STDOUT_FD = if (stdout != std.os.windows.INVALID_HANDLE_VALUE) bun.toFD(stdout) else bun.invalid_fd;
-            bun.win32.STDIN_FD = if (stdin != std.os.windows.INVALID_HANDLE_VALUE) bun.toFD(stdin) else bun.invalid_fd;
+            const fd_internals = @import("./fd.zig");
+            const INVALID_HANDLE_VALUE = std.os.windows.INVALID_HANDLE_VALUE;
+            fd_internals.windows_cached_stderr = if (stderr != INVALID_HANDLE_VALUE) .fromSystem(stderr) else .invalid;
+            fd_internals.windows_cached_stdout = if (stdout != INVALID_HANDLE_VALUE) .fromSystem(stdout) else .invalid;
+            fd_internals.windows_cached_stdin = if (stdin != INVALID_HANDLE_VALUE) .fromSystem(stdin) else .invalid;
+            if (Environment.isDebug) fd_internals.windows_cached_fd_set = true;
 
-            buffered_stdin.unbuffered_reader.context.handle = bun.win32.STDIN_FD;
+            buffered_stdin.unbuffered_reader.context.handle = .stdin();
 
             // https://learn.microsoft.com/en-us/windows/console/setconsoleoutputcp
             const CP_UTF8 = 65001;
-            console_output_codepage = w.kernel32.GetConsoleOutputCP();
-            _ = w.kernel32.SetConsoleOutputCP(CP_UTF8);
+            console_output_codepage = c.GetConsoleOutputCP();
+            _ = c.SetConsoleOutputCP(CP_UTF8);
 
-            console_codepage = w.kernel32.GetConsoleOutputCP();
-            _ = w.SetConsoleCP(CP_UTF8);
+            console_codepage = c.GetConsoleCP();
+            _ = c.SetConsoleCP(CP_UTF8);
 
             var mode: w.DWORD = undefined;
-            if (w.kernel32.GetConsoleMode(stdin, &mode) != 0) {
+            if (c.GetConsoleMode(stdin, &mode) != 0) {
                 console_mode[0] = mode;
                 bun_stdio_tty[0] = 1;
                 // There are no flags to set on standard in, but just in case something
@@ -213,16 +204,16 @@ pub const Source = struct {
                 // intentionally set for any purpose, and instead only caused problems.
             }
 
-            if (w.kernel32.GetConsoleMode(stdout, &mode) != 0) {
+            if (c.GetConsoleMode(stdout, &mode) != 0) {
                 console_mode[1] = mode;
                 bun_stdio_tty[1] = 1;
-                _ = w.SetConsoleMode(stdout, w.ENABLE_PROCESSED_OUTPUT | std.os.windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING | w.ENABLE_WRAP_AT_EOL_OUTPUT | mode);
+                _ = c.SetConsoleMode(stdout, w.ENABLE_PROCESSED_OUTPUT | std.os.windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING | w.ENABLE_WRAP_AT_EOL_OUTPUT | mode);
             }
 
-            if (w.kernel32.GetConsoleMode(stderr, &mode) != 0) {
+            if (c.GetConsoleMode(stderr, &mode) != 0) {
                 console_mode[2] = mode;
                 bun_stdio_tty[2] = 1;
-                _ = w.SetConsoleMode(stderr, w.ENABLE_PROCESSED_OUTPUT | std.os.windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING | w.ENABLE_WRAP_AT_EOL_OUTPUT | mode);
+                _ = c.SetConsoleMode(stderr, w.ENABLE_PROCESSED_OUTPUT | std.os.windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING | w.ENABLE_WRAP_AT_EOL_OUTPUT | mode);
             }
         }
     };
@@ -242,29 +233,30 @@ pub const Source = struct {
             return bun_is_stdio_null[0] == 1;
         }
 
+        pub extern "c" fn bun_initialize_process() void;
         pub fn init() void {
-            bun.C.bun_initialize_process();
+            bun_initialize_process();
 
             if (Environment.isWindows) {
                 WindowsStdio.init();
             }
 
-            const stdout = bun.sys.File.from(std.io.getStdOut());
-            const stderr = bun.sys.File.from(std.io.getStdErr());
+            const stdout = bun.sys.File.from(std.fs.File.stdout());
+            const stderr = bun.sys.File.from(std.fs.File.stderr());
 
-            Source.init(stdout, stderr)
-                .set();
+            Source.setInit(stdout, stderr);
 
             if (comptime Environment.isDebug or Environment.enable_logs) {
                 initScopedDebugWriterAtStartup();
             }
         }
 
+        pub extern "c" fn bun_restore_stdio() void;
         pub fn restore() void {
             if (Environment.isWindows) {
                 WindowsStdio.restore();
             } else {
-                bun.C.bun_restore_stdio();
+                bun_restore_stdio();
             }
         }
     };
@@ -287,29 +279,22 @@ pub const Source = struct {
             return;
         }
 
-        const term = bun.getenvZ("TERM") orelse "";
+        const term = bun.env_var.TERM.get() orelse "";
         if (strings.eqlComptime(term, "dumb")) {
             return;
         }
 
-        if (bun.getenvZ("TMUX") != null) {
+        if (bun.env_var.TMUX.get() != null) {
             lazy_color_depth = .@"256";
             return;
         }
 
-        if (bun.getenvZ("CI")) |ci| {
-            inline for (.{ "APPVEYOR", "BUILDKITE", "CIRCLECI", "DRONE", "GITHUB_ACTIONS", "GITLAB_CI", "TRAVIS" }) |ci_env| {
-                if (strings.eqlComptime(ci, ci_env)) {
-                    lazy_color_depth = .@"256";
-                    return;
-                }
-            }
-
+        if (bun.env_var.CI.get() != null) {
             lazy_color_depth = .@"16";
             return;
         }
 
-        if (bun.getenvZ("TERM_PROGRAM")) |term_program| {
+        if (bun.env_var.TERM_PROGRAM.get()) |term_program| {
             const use_16m = .{
                 "ghostty",
                 "MacTerm",
@@ -327,7 +312,7 @@ pub const Source = struct {
 
         var has_color_term_set = false;
 
-        if (bun.getenvZ("COLORTERM")) |color_term| {
+        if (bun.env_var.COLORTERM.get()) |color_term| {
             if (strings.eqlComptime(color_term, "truecolor") or strings.eqlComptime(color_term, "24bit")) {
                 lazy_color_depth = .@"16m";
                 return;
@@ -393,8 +378,8 @@ pub const Source = struct {
         return lazy_color_depth;
     }
 
-    pub fn set(new_source: *const Source) void {
-        source = new_source.*;
+    pub fn setInit(stdout: StreamType, stderr: StreamType) void {
+        source.init(stdout, stderr);
 
         source_set = true;
         if (!stdout_stream_set) {
@@ -421,11 +406,10 @@ pub const Source = struct {
 
                 enable_ansi_colors_stdout = enable_color orelse is_stdout_tty;
                 enable_ansi_colors_stderr = enable_color orelse is_stderr_tty;
-                enable_ansi_colors = enable_ansi_colors_stdout or enable_ansi_colors_stderr;
             }
 
-            stdout_stream = new_source.stream;
-            stderr_stream = new_source.error_stream;
+            stdout_stream = stdout;
+            stderr_stream = stderr;
         }
     }
 };
@@ -437,7 +421,7 @@ pub const OutputStreamDescriptor = enum {
     terminal,
 };
 
-pub var enable_ansi_colors = Environment.isNative;
+pub const enable_ansi_colors = @compileError("Deprecated to prevent accidentally using the wrong one. Use enable_ansi_colors_stdout or enable_ansi_colors_stderr instead.");
 pub var enable_ansi_colors_stderr = Environment.isNative;
 pub var enable_ansi_colors_stdout = Environment.isNative;
 pub var enable_buffering = Environment.isNative;
@@ -447,39 +431,100 @@ pub var is_github_action = false;
 pub var stderr_descriptor_type = OutputStreamDescriptor.unknown;
 pub var stdout_descriptor_type = OutputStreamDescriptor.unknown;
 
-pub inline fn isEmojiEnabled() bool {
-    return enable_ansi_colors;
+pub inline fn isStdoutTTY() bool {
+    return bun_stdio_tty[1] != 0;
+}
+
+pub inline fn isStderrTTY() bool {
+    return bun_stdio_tty[2] != 0;
+}
+
+pub inline fn isStdinTTY() bool {
+    return bun_stdio_tty[0] != 0;
 }
 
 pub fn isGithubAction() bool {
-    if (bun.getenvZ("GITHUB_ACTIONS")) |value| {
-        return strings.eqlComptime(value, "true");
+    if (bun.env_var.GITHUB_ACTIONS.get()) {
+        // Do not print github annotations for AI agents because that wastes the context window.
+        return !isAIAgent();
     }
     return false;
+}
+
+pub fn isAIAgent() bool {
+    const get_is_agent = struct {
+        var value = false;
+        fn evaluate() bool {
+            if (bun.env_var.AGENT.get()) |env| {
+                return strings.eqlComptime(env, "1");
+            }
+
+            if (isVerbose()) {
+                return false;
+            }
+
+            // Claude Code.
+            if (bun.env_var.CLAUDECODE.get()) {
+                return true;
+            }
+
+            // Replit.
+            if (bun.env_var.REPL_ID.get()) {
+                return true;
+            }
+
+            // TODO: add environment variable for Gemini
+            // Gemini does not appear to add any environment variables to identify it.
+
+            // TODO: add environment variable for Codex
+            // codex does not appear to add any environment variables to identify it.
+
+            // TODO: add environment variable for Cursor Background Agents
+            // cursor does not appear to add any environment variables to identify it.
+
+            return false;
+        }
+
+        fn setValue() void {
+            value = evaluate();
+        }
+
+        var once = std.once(setValue);
+
+        pub fn isEnabled() bool {
+            once.call();
+            return value;
+        }
+    };
+
+    return get_is_agent.isEnabled();
 }
 
 pub fn isVerbose() bool {
     // Set by Github Actions when a workflow is run using debug mode.
-    if (bun.getenvZ("RUNNER_DEBUG")) |value| {
-        if (strings.eqlComptime(value, "1")) {
-            return true;
-        }
-    }
-    return false;
+    return bun.env_var.RUNNER_DEBUG.get();
 }
 
-// var _source_for_test: if (Environment.isTest) Source else void = undefined;
-// var _source_for_test_set = false;
-// pub fn initTest() void {
-//     if (_source_for_test_set) return;
-//     _source_for_test_set = true;
-//     const in = std.io.getStdErr();
-//     const out = std.io.getStdOut();
-//     _source_for_test = Source.init(File.from(out), File.from(in));
-//     Source.set(&_source_for_test);
-// }
 pub fn enableBuffering() void {
     if (comptime Environment.isNative) enable_buffering = true;
+}
+
+const EnableBufferingScope = struct {
+    prev_buffering: bool,
+    pub fn init() EnableBufferingScope {
+        const prev_buffering = enable_buffering;
+        enable_buffering = true;
+        return .{ .prev_buffering = prev_buffering };
+    }
+
+    /// Does not call Output.flush().
+    pub fn deinit(self: EnableBufferingScope) void {
+        enable_buffering = self.prev_buffering;
+    }
+};
+
+pub fn enableBufferingScope() EnableBufferingScope {
+    return EnableBufferingScope.init();
 }
 
 pub fn disableBuffering() void {
@@ -490,7 +535,7 @@ pub fn disableBuffering() void {
 pub fn panic(comptime fmt: string, args: anytype) noreturn {
     @branchHint(.cold);
 
-    if (isEmojiEnabled()) {
+    if (enable_ansi_colors_stderr) {
         std.debug.panic(comptime prettyFmt(fmt, true), args);
     } else {
         std.debug.panic(comptime prettyFmt(fmt, false), args);
@@ -499,45 +544,60 @@ pub fn panic(comptime fmt: string, args: anytype) noreturn {
 
 pub const WriterType: type = @TypeOf(Source.StreamType.quietWriter(undefined));
 
+pub fn rawErrorWriter() Source.StreamType {
+    bun.debugAssert(source_set);
+    return source.raw_error_stream;
+}
+
 // TODO: investigate migrating this to the buffered one.
-pub fn errorWriter() WriterType {
-    bun.debugAssert(source_set);
-    return source.error_stream.quietWriter();
-}
-
-pub fn errorWriterBuffered() Source.BufferedStream.Writer {
-    bun.debugAssert(source_set);
-    return source.buffered_error_stream.writer();
-}
-
-// TODO: investigate returning the buffered_error_stream
-pub fn errorStream() Source.StreamType {
+pub fn errorWriter() *std.Io.Writer {
     bun.debugAssert(source_set);
     return source.error_stream;
 }
 
-pub fn writer() WriterType {
+pub fn errorWriterBuffered() *std.Io.Writer {
     bun.debugAssert(source_set);
-    return source.stream.quietWriter();
+    return source.buffered_error_stream;
+}
+
+// TODO: investigate returning the buffered_error_stream
+pub fn errorStream() *std.Io.Writer {
+    bun.debugAssert(source_set);
+    return source.error_stream;
+}
+
+pub fn rawWriter() Source.StreamType {
+    bun.debugAssert(source_set);
+    return source.raw_stream;
+}
+
+pub fn writer() *std.Io.Writer {
+    bun.debugAssert(source_set);
+    return source.stream;
+}
+
+pub fn writerBuffered() *std.Io.Writer {
+    bun.debugAssert(source_set);
+    return source.buffered_stream;
 }
 
 pub fn resetTerminal() void {
-    if (!enable_ansi_colors) {
+    if (!enable_ansi_colors_stderr and !enable_ansi_colors_stdout) {
         return;
     }
 
     if (enable_ansi_colors_stderr) {
-        _ = source.error_stream.write("\x1B[2J\x1B[3J\x1B[H").unwrap() catch 0;
+        source.error_stream.writeAll("\x1B[2J\x1B[3J\x1B[H") catch {};
     } else {
-        _ = source.stream.write("\x1B[2J\x1B[3J\x1B[H").unwrap() catch 0;
+        source.stream.writeAll("\x1B[2J\x1B[3J\x1B[H") catch {};
     }
 }
 
 pub fn resetTerminalAll() void {
     if (enable_ansi_colors_stderr)
-        _ = source.error_stream.write("\x1B[2J\x1B[3J\x1B[H").unwrap() catch 0;
+        source.error_stream.writeAll("\x1B[2J\x1B[3J\x1B[H") catch {};
     if (enable_ansi_colors_stdout)
-        _ = source.stream.write("\x1B[2J\x1B[3J\x1B[H").unwrap() catch 0;
+        source.stream.writeAll("\x1B[2J\x1B[3J\x1B[H") catch {};
 }
 
 /// Write buffered stdout & stderr to the terminal.
@@ -556,7 +616,7 @@ pub const ElapsedFormatter = struct {
     colors: bool,
     duration_ns: u64 = 0,
 
-    pub fn format(self: ElapsedFormatter, comptime _: []const u8, _: std.fmt.FormatOptions, writer_: anytype) !void {
+    pub fn format(self: ElapsedFormatter, writer_: *std.Io.Writer) !void {
         switch (self.duration_ns) {
             0...std.time.ns_per_ms * 10 => {
                 const fmt_str = "<r><d>[{d:>.2}ms<r><d>]<r>";
@@ -656,7 +716,7 @@ pub noinline fn printErrorable(comptime fmt: string, args: anytype) !void {
         try source.stream.writer().print(fmt, args);
         root.console_error(root.Uint8Array.fromSlice(source.stream.buffer[0..source.stream.pos]));
     } else {
-        std.fmt.format(source.stream.writer(), fmt, args) catch unreachable;
+        source.stream.writer().print(fmt, args) catch unreachable;
     }
 }
 
@@ -685,19 +745,19 @@ pub inline fn _debug(comptime fmt: string, args: anytype) void {
 }
 
 // callconv is a workaround for a zig wasm bug?
-pub noinline fn print(comptime fmt: string, args: anytype) callconv(std.builtin.CallingConvention.Unspecified) void {
+pub noinline fn print(comptime fmt: string, args: anytype) callconv(std.builtin.CallingConvention.auto) void {
     if (comptime Environment.isWasm) {
         source.stream.pos = 0;
-        std.fmt.format(source.stream.writer(), fmt, args) catch unreachable;
+        source.stream.writer().print(fmt, args) catch unreachable;
         root.console_log(root.Uint8Array.fromSlice(source.stream.buffer[0..source.stream.pos]));
     } else {
         bun.debugAssert(source_set);
 
         // There's not much we can do if this errors. Especially if it's something like BrokenPipe.
         if (enable_buffering) {
-            std.fmt.format(source.buffered_stream.writer(), fmt, args) catch {};
+            source.buffered_stream.print(fmt, args) catch {};
         } else {
-            std.fmt.format(writer(), fmt, args) catch {};
+            writer().print(fmt, args) catch {};
         }
     }
 }
@@ -711,8 +771,20 @@ pub noinline fn print(comptime fmt: string, args: anytype) callconv(std.builtin.
 ///   BUN_DEBUG_ALL=1
 pub const LogFunction = fn (comptime fmt: string, args: anytype) callconv(bun.callconv_inline) void;
 
-pub fn Scoped(comptime tag: anytype, comptime disabled: bool) type {
-    const tagname = comptime brk: {
+pub const Visibility = enum {
+    /// Hide logs for this scope by default.
+    hidden,
+    /// Show logs for this scope by default.
+    visible,
+
+    /// Show logs for this scope by default if and only if `condition` is true.
+    pub fn visibleIf(condition: bool) Visibility {
+        return if (condition) .visible else .hidden;
+    }
+};
+
+pub fn Scoped(comptime tag: anytype, comptime visibility: Visibility) type {
+    const tagname = comptime if (!Environment.enable_logs) .{} else brk: {
         const input = switch (@TypeOf(tag)) {
             @Type(.enum_literal) => @tagName(tag),
             else => tag,
@@ -724,51 +796,53 @@ pub fn Scoped(comptime tag: anytype, comptime disabled: bool) type {
         break :brk ascii_slice;
     };
 
-    return ScopedLogger(&tagname, disabled);
+    return ScopedLogger(&tagname, visibility);
 }
 
-fn ScopedLogger(comptime tagname: []const u8, comptime disabled: bool) type {
+fn ScopedLogger(comptime tagname: []const u8, comptime visibility: Visibility) type {
     if (comptime !Environment.enable_logs) {
         return struct {
             pub inline fn isVisible() bool {
                 return false;
             }
-            pub inline fn log(comptime _: string, _: anytype) void {}
+            pub fn log(comptime _: string, _: anytype) callconv(bun.callconv_inline) void {}
         };
     }
 
     return struct {
-        const BufferedWriter = std.io.BufferedWriter(4096, bun.sys.File.QuietWriter);
-
-        var buffered_writer: BufferedWriter = undefined;
-        var out: BufferedWriter.Writer = undefined;
+        var buffer: [4096]u8 = undefined;
+        var buffered_writer: File.QuietWriter.Adapter = undefined;
+        var out: *std.Io.Writer = undefined;
         var out_set = false;
-        var really_disable = disabled;
-        var evaluated_disable = false;
+        var really_disable = std.atomic.Value(bool).init(visibility == .hidden);
+
         var lock = bun.Mutex{};
 
-        pub fn isVisible() bool {
-            if (!evaluated_disable) {
-                evaluated_disable = true;
-                if (bun.getenvZAnyCase("BUN_DEBUG_" ++ tagname)) |val| {
-                    really_disable = strings.eqlComptime(val, "0");
-                } else if (bun.getenvZAnyCase("BUN_DEBUG_ALL")) |val| {
-                    really_disable = strings.eqlComptime(val, "0");
-                } else if (bun.getenvZAnyCase("BUN_DEBUG_QUIET_LOGS")) |val| {
-                    really_disable = really_disable or !strings.eqlComptime(val, "0");
-                } else {
-                    for (bun.argv) |arg| {
-                        if (strings.eqlCaseInsensitiveASCII(arg, comptime "--debug-" ++ tagname, true)) {
-                            really_disable = false;
-                            break;
-                        } else if (strings.eqlCaseInsensitiveASCII(arg, comptime "--debug-all", true)) {
-                            really_disable = false;
-                            break;
-                        }
+        var is_visible_once = std.once(evaluateIsVisible);
+
+        fn evaluateIsVisible() void {
+            if (bun.getenvZAnyCase("BUN_DEBUG_" ++ tagname)) |val| {
+                really_disable.store(strings.eqlComptime(val, "0"), .monotonic);
+            } else if (bun.env_var.BUN_DEBUG_ALL.get()) |val| {
+                really_disable.store(!val, .monotonic);
+            } else if (bun.env_var.BUN_DEBUG_QUIET_LOGS.get()) |val| {
+                really_disable.store(really_disable.load(.monotonic) or val, .monotonic);
+            } else {
+                for (bun.argv) |arg| {
+                    if (strings.eqlCaseInsensitiveASCII(arg, comptime "--debug-" ++ tagname, true)) {
+                        really_disable.store(false, .monotonic);
+                        break;
+                    } else if (strings.eqlCaseInsensitiveASCII(arg, comptime "--debug-all", true)) {
+                        really_disable.store(false, .monotonic);
+                        break;
                     }
                 }
             }
-            return !really_disable;
+        }
+
+        pub fn isVisible() bool {
+            is_visible_once.call();
+            return !really_disable.load(.monotonic);
         }
 
         /// Debug-only logs which should not appear in release mode
@@ -788,6 +862,8 @@ fn ScopedLogger(comptime tagname: []const u8, comptime disabled: bool) type {
                 return;
             }
 
+            if (bun.crash_handler.isPanicking()) return;
+
             if (Environment.enable_logs) ScopedDebugWriter.disable_inside_log += 1;
             defer {
                 if (Environment.enable_logs)
@@ -798,43 +874,31 @@ fn ScopedLogger(comptime tagname: []const u8, comptime disabled: bool) type {
                 return;
 
             if (!out_set) {
-                buffered_writer = .{
-                    .unbuffered_writer = scopedWriter(),
-                };
-                out = buffered_writer.writer();
+                buffered_writer = scopedWriter().adaptToNewApi(&buffer);
+                out = &buffered_writer.new_interface;
                 out_set = true;
             }
             lock.lock();
             defer lock.unlock();
 
-            if (enable_ansi_colors_stdout and source_set and buffered_writer.unbuffered_writer.context.handle == writer().context.handle) {
-                out.print(comptime prettyFmt("<r><d>[" ++ tagname ++ "]<r> " ++ fmt, true), args) catch {
-                    really_disable = true;
-                    return;
-                };
-                buffered_writer.flush() catch {
-                    really_disable = true;
-                    return;
-                };
-            } else {
-                out.print(comptime prettyFmt("<r><d>[" ++ tagname ++ "]<r> " ++ fmt, false), args) catch {
-                    really_disable = true;
-                    return;
-                };
-                buffered_writer.flush() catch {
-                    really_disable = true;
-                    return;
-                };
+            switch (enable_ansi_colors_stdout and source_set and scopedWriter().context.handle == rawWriter().handle) {
+                inline else => |use_ansi| {
+                    out.print(comptime prettyFmt("<r><d>[" ++ tagname ++ "]<r> " ++ fmt, use_ansi), args) catch {
+                        really_disable.store(true, .monotonic);
+                        return;
+                    };
+                    out.flush() catch {
+                        really_disable.store(true, .monotonic);
+                        return;
+                    };
+                },
             }
         }
     };
 }
 
-pub fn scoped(comptime tag: anytype, comptime disabled: bool) LogFunction {
-    return Scoped(
-        tag,
-        disabled,
-    ).log;
+pub fn scoped(comptime tag: anytype, comptime visibility: Visibility) LogFunction {
+    return Scoped(tag, visibility).log;
 }
 
 pub fn up(n: usize) void {
@@ -864,6 +928,7 @@ pub const color_map = ComptimeStringMap(string, .{
     &.{ "b", CSI ++ "1m" },
     &.{ "d", CSI ++ "2m" },
     &.{ "i", CSI ++ "3m" },
+    &.{ "u", CSI ++ "4m" },
     &.{ "black", CSI ++ "30m" },
     &.{ "red", CSI ++ "31m" },
     &.{ "green", CSI ++ "32m" },
@@ -877,17 +942,13 @@ pub const color_map = ComptimeStringMap(string, .{
 });
 const RESET: string = "\x1b[0m";
 pub fn prettyFmt(comptime fmt: string, comptime is_enabled: bool) [:0]const u8 {
-    if (comptime bun.fast_debug_build_mode)
-        return fmt;
-
     comptime var new_fmt: [fmt.len * 4]u8 = undefined;
     comptime var new_fmt_i: usize = 0;
 
     @setEvalBranchQuota(9999);
     comptime var i: usize = 0;
     comptime while (i < fmt.len) {
-        const c = fmt[i];
-        switch (c) {
+        switch (fmt[i]) {
             '\\' => {
                 i += 1;
                 if (i < fmt.len) {
@@ -962,17 +1023,6 @@ pub noinline fn prettyWithPrinter(comptime fmt: string, args: anytype, comptime 
         printer(comptime prettyFmt(fmt, true), args);
     } else {
         printer(comptime prettyFmt(fmt, false), args);
-    }
-}
-
-pub noinline fn prettyWithPrinterFn(comptime fmt: string, args: anytype, comptime printFn: anytype, ctx: anytype) void {
-    if (comptime bun.fast_debug_build_mode)
-        return printFn(ctx, comptime prettyFmt(fmt, false), args);
-
-    if (enable_ansi_colors) {
-        printFn(ctx, comptime prettyFmt(fmt, true), args);
-    } else {
-        printFn(ctx, comptime prettyFmt(fmt, false), args);
     }
 }
 
@@ -1052,9 +1102,9 @@ pub noinline fn printError(comptime fmt: string, args: anytype) void {
     } else {
         // There's not much we can do if this errors. Especially if it's something like BrokenPipe
         if (enable_buffering)
-            std.fmt.format(source.buffered_error_stream.writer(), fmt, args) catch {}
+            source.buffered_error_stream.print(fmt, args) catch {}
         else
-            std.fmt.format(source.error_stream.writer(), fmt, args) catch {};
+            source.error_stream.print(fmt, args) catch {};
     }
 }
 
@@ -1073,10 +1123,10 @@ pub const DebugTimer = struct {
 
     pub const WriteError = error{};
 
-    pub fn format(self: DebugTimer, comptime _: []const u8, _: std.fmt.FormatOptions, w: anytype) WriteError!void {
+    pub fn format(self: DebugTimer, w: *std.Io.Writer) std.Io.Writer.Error!void {
         if (comptime Environment.isDebug) {
             var timer = self.timer;
-            w.print("{d:.3}ms", .{@as(f64, @floatFromInt(timer.read())) / std.time.ns_per_ms}) catch unreachable;
+            try w.print("{d:.3}ms", .{@as(f64, @floatFromInt(timer.read())) / std.time.ns_per_ms});
         }
     }
 };
@@ -1160,7 +1210,7 @@ pub inline fn err(error_name: anytype, comptime fmt: []const u8, args: anytype) 
 
         // enums
         if (info == .@"enum") {
-            const errno: bun.C.SystemErrno = @enumFromInt(@intFromEnum(info));
+            const errno: bun.sys.SystemErrno = @enumFromInt(@intFromEnum(info));
             break :display_name .{ @tagName(errno), false };
         }
 
@@ -1181,10 +1231,14 @@ pub const ScopedDebugWriter = struct {
     pub threadlocal var disable_inside_log: isize = 0;
 };
 pub fn disableScopedDebugWriter() void {
-    ScopedDebugWriter.disable_inside_log += 1;
+    if (!@inComptime()) {
+        ScopedDebugWriter.disable_inside_log += 1;
+    }
 }
 pub fn enableScopedDebugWriter() void {
-    ScopedDebugWriter.disable_inside_log -= 1;
+    if (!@inComptime()) {
+        ScopedDebugWriter.disable_inside_log -= 1;
+    }
 }
 
 extern "c" fn getpid() c_int;
@@ -1192,7 +1246,7 @@ extern "c" fn getpid() c_int;
 pub fn initScopedDebugWriterAtStartup() void {
     bun.debugAssert(source_set);
 
-    if (bun.getenvZ("BUN_DEBUG")) |path| {
+    if (bun.env_var.BUN_DEBUG.get()) |path| {
         if (path.len > 0 and !strings.eql(path, "0") and !strings.eql(path, "false")) {
             if (std.fs.path.dirname(path)) |dir| {
                 std.fs.cwd().makePath(dir) catch {};
@@ -1205,18 +1259,18 @@ pub fn initScopedDebugWriterAtStartup() void {
             const path_fmt = std.mem.replaceOwned(u8, bun.default_allocator, path, "{pid}", pid) catch @panic("failed to allocate path");
             defer bun.default_allocator.free(path_fmt);
 
-            const fd = std.fs.cwd().createFile(path_fmt, .{
+            const fd: bun.FD = .fromStdFile(std.fs.cwd().createFile(path_fmt, .{
                 .mode = if (Environment.isPosix) 0o644 else 0,
             }) catch |open_err| {
                 panic("Failed to open file for debug output: {s} ({s})", .{ @errorName(open_err), path });
-            };
-            _ = bun.sys.ftruncate(bun.toFD(fd), 0); // windows
-            ScopedDebugWriter.scoped_file_writer = File.from(fd).quietWriter();
+            });
+            _ = fd.truncate(0); // windows
+            ScopedDebugWriter.scoped_file_writer = fd.quietWriter();
             return;
         }
     }
 
-    ScopedDebugWriter.scoped_file_writer = source.stream.quietWriter();
+    ScopedDebugWriter.scoped_file_writer = source.raw_stream.quietWriter();
 }
 fn scopedWriter() File.QuietWriter {
     if (comptime !Environment.isDebug and !Environment.enable_logs) {
@@ -1233,11 +1287,50 @@ pub inline fn errGeneric(comptime fmt: []const u8, args: anytype) void {
 
 /// Print a red error message with "error: " as the prefix and a formatted message.
 pub inline fn errFmt(formatter: anytype) void {
-    return errGeneric("{}", .{formatter});
+    return errGeneric("{f}", .{formatter});
 }
 
-/// This struct is a workaround a Windows terminal bug.
-/// TODO: when https://github.com/microsoft/terminal/issues/16606 is resolved, revert this commit.
-pub var buffered_stdin = std.io.BufferedReader(4096, File.Reader){
-    .unbuffered_reader = File.Reader{ .context = .{ .handle = if (Environment.isWindows) undefined else bun.toFD(0) } },
+pub var buffered_stdin = bun.deprecated.BufferedReader(4096, File.Reader){
+    .unbuffered_reader = .{ .context = .{ .handle = if (Environment.isWindows) undefined else .stdin() } },
+    .buf = undefined,
 };
+
+const string = []const u8;
+
+/// https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036
+pub const synchronized_start = "\x1b[?2026h";
+
+/// https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036
+pub const synchronized_end = "\x1b[?2026l";
+
+/// https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036
+pub fn synchronized() Synchronized {
+    return Synchronized.begin();
+}
+pub const Synchronized = struct {
+    pub fn begin() Synchronized {
+        if (Environment.isPosix) {
+            print(synchronized_start, .{});
+        }
+        return .{};
+    }
+
+    pub fn end(_: @This()) void {
+        if (Environment.isPosix) {
+            print(synchronized_end, .{});
+        }
+    }
+};
+
+const Environment = @import("./env.zig");
+const root = @import("root");
+const std = @import("std");
+const SystemTimer = @import("./system_timer.zig").Timer;
+
+const bun = @import("bun");
+const ComptimeStringMap = bun.ComptimeStringMap;
+const Global = bun.Global;
+const c = bun.c;
+const strings = bun.strings;
+const use_mimalloc = bun.use_mimalloc;
+const File = bun.sys.File;

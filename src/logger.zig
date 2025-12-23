@@ -1,27 +1,3 @@
-const std = @import("std");
-const Api = @import("./api/schema.zig").Api;
-const js = bun.JSC;
-const ImportKind = @import("./import_record.zig").ImportKind;
-const bun = @import("root").bun;
-const string = bun.string;
-const Output = bun.Output;
-const Global = bun.Global;
-const Environment = bun.Environment;
-const strings = bun.strings;
-const MutableString = bun.MutableString;
-const stringZ = bun.stringZ;
-const default_allocator = bun.default_allocator;
-const C = bun.C;
-const JSC = bun.JSC;
-const fs = @import("fs.zig");
-const unicode = std.unicode;
-const Ref = @import("./ast/base.zig").Ref;
-const expect = std.testing.expect;
-const assert = bun.assert;
-const StringBuilder = bun.StringBuilder;
-const OOM = bun.OOM;
-const JSError = bun.JSError;
-
 pub const Kind = enum(u8) {
     err = 0,
     warn = 1,
@@ -44,7 +20,7 @@ pub const Kind = enum(u8) {
         };
     }
 
-    pub inline fn string(self: Kind) bun.string {
+    pub inline fn string(self: Kind) []const u8 {
         return switch (self) {
             .err => "error",
             .warn => "warn",
@@ -54,7 +30,7 @@ pub const Kind = enum(u8) {
         };
     }
 
-    pub inline fn toAPI(kind: Kind) Api.MessageLevel {
+    pub inline fn toAPI(kind: Kind) api.MessageLevel {
         return switch (kind) {
             .err => .err,
             .warn => .warn,
@@ -69,8 +45,8 @@ pub const Kind = enum(u8) {
 pub const Loc = struct {
     start: i32 = -1,
 
-    pub inline fn toNullable(loc: *Loc) ?Loc {
-        return if (loc.start == -1) null else loc.*;
+    pub inline fn toNullable(loc: Loc) ?Loc {
+        return if (loc.start == -1) null else loc;
     }
 
     pub const toUsize = i;
@@ -95,8 +71,22 @@ pub const Loc = struct {
 };
 
 pub const Location = struct {
+    // Field ordering optimized to reduce padding:
+    // - 16-byte fields first: string (ptr+len), ?string (ptr+len+null flag)
+    // - 8-byte fields next: usize
+    // - 4-byte fields last: i32
+    // This eliminates padding between differently-sized fields.
+
     file: string,
     namespace: string = "file",
+    /// Text on the line, avoiding the need to refetch the source code
+    line_text: ?string = null,
+    /// Number of bytes this location should highlight.
+    /// 0 to just point at a single character
+    length: usize = 0,
+    // TODO: document or remove
+    offset: usize = 0,
+
     /// 1-based line number.
     /// Line <= 0 means there is no line and column information.
     // TODO: move to `bun.Ordinal`
@@ -105,22 +95,12 @@ pub const Location = struct {
     // original docs: 0-based, in bytes.
     // but there is a place where this is emitted in output, implying one based character offset
     column: i32,
-    /// Number of bytes this location should highlight.
-    /// 0 to just point at a single character
-    length: usize = 0,
-    /// Text on the line, avoiding the need to refetch the source code
-    line_text: ?string = null,
-    // TODO: remove this unused field
-    suggestion: ?string = null,
-    // TODO: document or remove
-    offset: usize = 0,
 
     pub fn memoryCost(this: *const Location) usize {
         var cost: usize = 0;
         cost += this.file.len;
         cost += this.namespace.len;
         if (this.line_text) |text| cost += text.len;
-        if (this.suggestion) |text| cost += text.len;
         return cost;
     }
 
@@ -128,7 +108,6 @@ pub const Location = struct {
         builder.count(this.file);
         builder.count(this.namespace);
         if (this.line_text) |text| builder.count(text);
-        if (this.suggestion) |text| builder.count(text);
     }
 
     pub fn clone(this: Location, allocator: std.mem.Allocator) !Location {
@@ -139,7 +118,6 @@ pub const Location = struct {
             .column = this.column,
             .length = this.length,
             .line_text = if (this.line_text != null) try allocator.dupe(u8, this.line_text.?) else null,
-            .suggestion = if (this.suggestion != null) try allocator.dupe(u8, this.suggestion.?) else null,
             .offset = this.offset,
         };
     }
@@ -152,19 +130,17 @@ pub const Location = struct {
             .column = this.column,
             .length = this.length,
             .line_text = if (this.line_text != null) string_builder.append(this.line_text.?) else null,
-            .suggestion = if (this.suggestion != null) string_builder.append(this.suggestion.?) else null,
             .offset = this.offset,
         };
     }
 
-    pub fn toAPI(this: *const Location) Api.Location {
-        return Api.Location{
+    pub fn toAPI(this: *const Location) api.Location {
+        return api.Location{
             .file = this.file,
             .namespace = this.namespace,
             .line = this.line,
             .column = this.column,
             .line_text = this.line_text orelse "",
-            .suggestion = this.suggestion orelse "",
             .offset = @as(u32, @truncate(this.offset)),
         };
     }
@@ -172,7 +148,7 @@ pub const Location = struct {
     // don't really know what's safe to deinit here!
     pub fn deinit(_: *Location, _: std.mem.Allocator) void {}
 
-    pub fn init(file: string, namespace: string, line: i32, column: i32, length: u32, line_text: ?string, suggestion: ?string) Location {
+    pub fn init(file: string, namespace: string, line: i32, column: i32, length: u32, line_text: ?string) Location {
         return Location{
             .file = file,
             .namespace = namespace,
@@ -180,7 +156,6 @@ pub const Location = struct {
             .column = column,
             .length = length,
             .line_text = line_text,
-            .suggestion = suggestion,
             .offset = length,
         };
     }
@@ -271,8 +246,8 @@ pub const Data = struct {
         if (this.location) |loc| loc.count(builder);
     }
 
-    pub fn toAPI(this: *const Data) Api.MessageData {
-        return Api.MessageData{
+    pub fn toAPI(this: *const Data) api.MessageData {
+        return api.MessageData{
             .text = this.text,
             .location = if (this.location != null) this.location.?.toAPI() else null,
         };
@@ -280,7 +255,7 @@ pub const Data = struct {
 
     pub fn writeFormat(
         this: *const Data,
-        to: anytype,
+        to: *std.Io.Writer,
         kind: Kind,
         redact_sensitive_information: bool,
         comptime enable_ansi_colors: bool,
@@ -303,7 +278,7 @@ pub const Data = struct {
             if (location.line_text) |line_text_| {
                 const line_text_right_trimmed = std.mem.trimRight(u8, line_text_, " \r\n\t");
                 const line_text = std.mem.trimLeft(u8, line_text_right_trimmed, "\n\r");
-                if (location.column > -1 and line_text.len > 0) {
+                if (location.column > 0 and line_text.len > 0) {
                     var line_offset_for_second_line: usize = @intCast(location.column - 1);
 
                     if (location.line > -1) {
@@ -323,12 +298,12 @@ pub const Data = struct {
                         line_offset_for_second_line += std.fmt.count("{d} | ", .{location.line});
                     }
 
-                    try to.print("{}\n", .{bun.fmt.fmtJavaScript(line_text, .{
+                    try to.print("{f}\n", .{bun.fmt.fmtJavaScript(line_text, .{
                         .enable_colors = enable_ansi_colors,
                         .redact_sensitive_information = redact_sensitive_information,
                     })});
 
-                    try to.writeByteNTimes(' ', line_offset_for_second_line);
+                    try to.splatByteAll(' ', line_offset_for_second_line);
                     if ((comptime enable_ansi_colors) and message_color.len > 0) {
                         try to.writeAll(message_color);
                         try to.writeAll(color_name);
@@ -362,7 +337,7 @@ pub const Data = struct {
         if (this.location) |*location| {
             if (location.file.len > 0) {
                 try to.writeAll("\n");
-                try to.writeByteNTimes(' ', (kind.string().len + ": ".len) - "at ".len);
+                try to.splatByteAll(' ', (kind.string().len + ": ".len) - "at ".len);
 
                 try to.print(comptime Output.prettyFmt("<d>at <r><cyan>{s}<r>", enable_ansi_colors), .{
                     location.file,
@@ -393,7 +368,7 @@ pub const Data = struct {
     }
 };
 
-pub const BabyString = packed struct {
+pub const BabyString = packed struct(u32) {
     offset: u16,
     len: u16,
 
@@ -425,12 +400,12 @@ pub const Msg = struct {
         return cost;
     }
 
-    pub fn fromJS(allocator: std.mem.Allocator, globalObject: *bun.JSC.JSGlobalObject, file: string, err: bun.JSC.JSValue) OOM!Msg {
-        var zig_exception_holder: bun.JSC.ZigException.Holder = bun.JSC.ZigException.Holder.init();
+    pub fn fromJS(allocator: std.mem.Allocator, globalObject: *bun.jsc.JSGlobalObject, file: string, err: bun.jsc.JSValue) bun.JSError!Msg {
+        var zig_exception_holder: bun.jsc.ZigException.Holder = bun.jsc.ZigException.Holder.init();
         if (err.toError()) |value| {
             value.toZigException(globalObject, zig_exception_holder.zigException());
         } else {
-            zig_exception_holder.zig_exception.message = err.toBunString(globalObject);
+            zig_exception_holder.zigException().message = try err.toBunString(globalObject);
         }
 
         return Msg{
@@ -445,10 +420,10 @@ pub const Msg = struct {
         };
     }
 
-    pub fn toJS(this: Msg, globalObject: *bun.JSC.JSGlobalObject, allocator: std.mem.Allocator) JSC.JSValue {
+    pub fn toJS(this: Msg, globalObject: *bun.jsc.JSGlobalObject, allocator: std.mem.Allocator) bun.OOM!jsc.JSValue {
         return switch (this.metadata) {
-            .build => JSC.BuildMessage.create(globalObject, allocator, this),
-            .resolve => JSC.ResolveMessage.create(globalObject, allocator, this, ""),
+            .build => bun.api.BuildMessage.create(globalObject, allocator, this),
+            .resolve => bun.api.ResolveMessage.create(globalObject, allocator, this, ""),
         };
     }
 
@@ -493,16 +468,16 @@ pub const Msg = struct {
         };
     };
 
-    pub fn toAPI(this: *const Msg, allocator: std.mem.Allocator) OOM!Api.Message {
+    pub fn toAPI(this: *const Msg, allocator: std.mem.Allocator) OOM!api.Message {
         var notes = try allocator.alloc(
-            Api.MessageData,
+            api.MessageData,
             this.notes.len,
         );
-        const msg = Api.Message{
+        const msg = api.Message{
             .level = this.kind.toAPI(),
             .data = this.data.toAPI(),
             .notes = notes,
-            .on = Api.MessageMeta{
+            .on = api.MessageMeta{
                 .resolve = if (this.metadata == .resolve) this.metadata.resolve.specifier.slice(this.data.text) else "",
                 .build = this.metadata == .build,
             },
@@ -515,8 +490,8 @@ pub const Msg = struct {
         return msg;
     }
 
-    pub fn toAPIFromList(comptime ListType: type, list: ListType, allocator: std.mem.Allocator) OOM![]Api.Message {
-        var out_list = try allocator.alloc(Api.Message, list.items.len);
+    pub fn toAPIFromList(comptime ListType: type, list: ListType, allocator: std.mem.Allocator) OOM![]api.Message {
+        var out_list = try allocator.alloc(api.Message, list.items.len);
         for (list.items, 0..) |item, i| {
             out_list[i] = try item.toAPI(allocator);
         }
@@ -537,7 +512,7 @@ pub const Msg = struct {
 
     pub fn writeFormat(
         msg: *const Msg,
-        to: anytype,
+        to: *std.Io.Writer,
         comptime enable_ansi_colors: bool,
     ) !void {
         try msg.data.writeFormat(to, msg.kind, msg.redact_sensitive_information, enable_ansi_colors);
@@ -629,7 +604,7 @@ pub const Range = struct {
 pub const Log = struct {
     warnings: u32 = 0,
     errors: u32 = 0,
-    msgs: std.ArrayList(Msg),
+    msgs: std.array_list.Managed(Msg),
     level: Level = if (Environment.isDebug) Level.info else Level.warn,
 
     clone_line_text: bool = false,
@@ -658,7 +633,7 @@ pub const Log = struct {
         return (this.warnings + this.errors) > 0;
     }
 
-    pub fn toAPI(this: *const Log, allocator: std.mem.Allocator) !Api.Log {
+    pub fn toAPI(this: *const Log, allocator: std.mem.Allocator) !api.Log {
         var warnings: u32 = 0;
         var errors: u32 = 0;
         for (this.msgs.items) |msg| {
@@ -666,7 +641,7 @@ pub const Log = struct {
             warnings += @as(u32, @intCast(@intFromBool(msg.kind == .warn)));
         }
 
-        return Api.Log{
+        return api.Log{
             .warnings = warnings,
             .errors = errors,
             .msgs = try Msg.toAPIFromList(@TypeOf(this.msgs), this.msgs, allocator),
@@ -701,8 +676,8 @@ pub const Log = struct {
             .{ "error", Level.err },
         });
 
-        pub fn fromJS(globalThis: *JSC.JSGlobalObject, value: JSC.JSValue) JSError!?Level {
-            if (value == .zero or value == .undefined) {
+        pub fn fromJS(globalThis: *jsc.JSGlobalObject, value: jsc.JSValue) JSError!?Level {
+            if (value == .zero or value.isUndefined()) {
                 return null;
             }
 
@@ -716,14 +691,14 @@ pub const Log = struct {
 
     pub fn init(allocator: std.mem.Allocator) Log {
         return Log{
-            .msgs = std.ArrayList(Msg).init(allocator),
+            .msgs = std.array_list.Managed(Msg).init(allocator),
             .level = default_log_level,
         };
     }
 
     pub fn initComptime(allocator: std.mem.Allocator) Log {
         return Log{
-            .msgs = std.ArrayList(Msg).init(allocator),
+            .msgs = std.array_list.Managed(Msg).init(allocator),
         };
     }
 
@@ -747,45 +722,45 @@ pub const Log = struct {
         }
     }
 
-    pub fn toJS(this: Log, global: *JSC.JSGlobalObject, allocator: std.mem.Allocator, message: string) JSC.JSValue {
+    pub fn toJS(this: Log, global: *jsc.JSGlobalObject, allocator: std.mem.Allocator, message: string) bun.JSError!jsc.JSValue {
         const msgs: []const Msg = this.msgs.items;
-        var errors_stack: [256]JSC.JSValue = undefined;
+        var errors_stack: [256]jsc.JSValue = undefined;
 
         const count = @as(u16, @intCast(@min(msgs.len, errors_stack.len)));
         switch (count) {
-            0 => return .undefined,
+            0 => return .js_undefined,
             1 => {
                 const msg = msgs[0];
                 return switch (msg.metadata) {
-                    .build => JSC.BuildMessage.create(global, allocator, msg),
-                    .resolve => JSC.ResolveMessage.create(global, allocator, msg, ""),
+                    .build => bun.api.BuildMessage.create(global, allocator, msg),
+                    .resolve => bun.api.ResolveMessage.create(global, allocator, msg, ""),
                 };
             },
             else => {
                 for (msgs[0..count], 0..) |msg, i| {
                     errors_stack[i] = switch (msg.metadata) {
-                        .build => JSC.BuildMessage.create(global, allocator, msg),
-                        .resolve => JSC.ResolveMessage.create(global, allocator, msg, ""),
+                        .build => try bun.api.BuildMessage.create(global, allocator, msg),
+                        .resolve => try bun.api.ResolveMessage.create(global, allocator, msg, ""),
                     };
                 }
-                const out = JSC.ZigString.init(message);
-                const agg = global.createAggregateError(errors_stack[0..count], &out);
+                const out = jsc.ZigString.init(message);
+                const agg = try global.createAggregateError(errors_stack[0..count], &out);
                 return agg;
             },
         }
     }
 
     /// unlike toJS, this always produces an AggregateError object
-    pub fn toJSAggregateError(this: Log, global: *JSC.JSGlobalObject, message: bun.String) JSC.JSValue {
-        return global.createAggregateErrorWithArray(message, this.toJSArray(global, bun.default_allocator));
+    pub fn toJSAggregateError(this: Log, global: *jsc.JSGlobalObject, message: bun.String) bun.JSError!jsc.JSValue {
+        return global.createAggregateErrorWithArray(message, try this.toJSArray(global, bun.default_allocator));
     }
 
-    pub fn toJSArray(this: Log, global: *JSC.JSGlobalObject, allocator: std.mem.Allocator) JSC.JSValue {
+    pub fn toJSArray(this: Log, global: *jsc.JSGlobalObject, allocator: std.mem.Allocator) bun.JSError!jsc.JSValue {
         const msgs: []const Msg = this.msgs.items;
 
-        const arr = JSC.JSValue.createEmptyArray(global, msgs.len);
+        const arr = try jsc.JSValue.createEmptyArray(global, msgs.len);
         for (msgs, 0..) |msg, i| {
-            arr.putIndex(global, @as(u32, @intCast(i)), msg.toJS(global, allocator));
+            try arr.putIndex(global, @as(u32, @intCast(i)), try msg.toJS(global, allocator));
         }
 
         return arr;
@@ -862,8 +837,10 @@ pub const Log = struct {
         return self.appendToWithRecycled(other, source.contents_is_recycled);
     }
 
-    pub fn deinit(self: *Log) void {
-        self.msgs.clearAndFree();
+    pub fn deinit(log: *Log) void {
+        log.msgs.clearAndFree();
+        // log.warnings = 0;
+        // log.errors = 0;
     }
 
     // TODO: remove `deinit` because it does not de-initialize the log; it clears it
@@ -880,8 +857,8 @@ pub const Log = struct {
         });
     }
 
-    inline fn allocPrint(allocator: std.mem.Allocator, comptime fmt: string, args: anytype) OOM!string {
-        return switch (Output.enable_ansi_colors) {
+    pub inline fn allocPrint(allocator: std.mem.Allocator, comptime fmt: string, args: anytype) OOM!string {
+        return switch (Output.enable_ansi_colors_stderr) {
             inline else => |enable_ansi_colors| std.fmt.allocPrint(allocator, Output.prettyFmt(fmt, enable_ansi_colors), args),
         };
     }
@@ -1069,6 +1046,11 @@ pub const Log = struct {
 
     pub fn addWarningFmtLineCol(log: *Log, filepath: []const u8, line: u32, col: u32, allocator: std.mem.Allocator, comptime text: string, args: anytype) OOM!void {
         @branchHint(.cold);
+        return log.addWarningFmtLineColWithNotes(filepath, line, col, allocator, text, args, &[_]Data{});
+    }
+
+    pub fn addWarningFmtLineColWithNotes(log: *Log, filepath: []const u8, line: u32, col: u32, allocator: std.mem.Allocator, comptime text: string, args: anytype, notes: []Data) OOM!void {
+        @branchHint(.cold);
         if (!Kind.shouldPrint(.warn, log.level)) return;
         log.warnings += 1;
 
@@ -1076,16 +1058,54 @@ pub const Log = struct {
 
         try log.addMsg(.{
             .kind = .warn,
-            .data = try Data.cloneLineText(Data{
-                .text = try allocPrint(allocator, text, args),
-                .location = Location{
-                    .file = filepath,
-                    .line = @intCast(line),
-                    .column = @intCast(col),
+            .data = try Data.cloneLineText(
+                Data{
+                    .text = try allocPrint(allocator, text, args),
+                    .location = Location{
+                        .file = filepath,
+                        .line = @intCast(line),
+                        .column = @intCast(col),
+                    },
                 },
-            }, log.clone_line_text, allocator),
+                log.clone_line_text,
+                allocator,
+            ),
+            .notes = notes,
         });
     }
+
+    // pub fn addWarningFmtLineColWithNote(log: *Log, filepath: []const u8, line: u32, col: u32, allocator: std.mem.Allocator, comptime text: string, args: anytype, comptime note_fmt: string, note_args: anytype, note_range: Range) OOM!void {
+    //     @branchHint(.cold);
+    //     if (!Kind.shouldPrint(.warn, log.level)) return;
+    //     log.warnings += 1;
+
+    //     var notes = try allocator.alloc(Data, 1);
+    //     notes[0] = Data{
+    //         .text = try allocPrint(allocator, note_fmt, note_args),
+    //         .lcoation = Location{
+    //             .file = filepath,
+    //             .line = @intCast(line),
+    //             .column = @intCast(col),
+    //         },
+    //     };
+
+    //     try log.addMsg(.{
+    //         .kind = .warn,
+    //         .data = try Data.cloneLineText(
+    //             Data{
+    //                 .text = try allocPrint(allocator, text, args),
+    //                 .location = Location{
+    //                     .file = filepath,
+    //                     .line = @intCast(line),
+    //                     .column = @intCast(col),
+    //                 },
+    //             },
+    //             log.clone_line_text,
+    //             allocator,
+    //         ),
+    //         .notes = notes,
+    //     });
+    // }
 
     pub fn addRangeWarningFmt(log: *Log, source: ?*const Source, r: Range, allocator: std.mem.Allocator, comptime text: string, args: anytype) OOM!void {
         @branchHint(.cold);
@@ -1269,13 +1289,13 @@ pub const Log = struct {
         );
     }
 
-    pub fn print(self: *const Log, to: anytype) !void {
-        return switch (Output.enable_ansi_colors) {
+    pub fn print(self: *const Log, to: *std.Io.Writer) !void {
+        return switch (Output.enable_ansi_colors_stderr) {
             inline else => |enable_ansi_colors| self.printWithEnableAnsiColors(to, enable_ansi_colors),
         };
     }
 
-    pub fn printWithEnableAnsiColors(self: *const Log, to: anytype, comptime enable_ansi_colors: bool) !void {
+    pub fn printWithEnableAnsiColors(self: *const Log, to: *std.Io.Writer, comptime enable_ansi_colors: bool) !void {
         var needs_newline = false;
         if (self.warnings > 0 and self.errors > 0) {
             // Print warnings at the top
@@ -1314,15 +1334,6 @@ pub const Log = struct {
 
         if (needs_newline) _ = try to.write("\n");
     }
-
-    pub fn toZigException(this: *const Log, allocator: std.mem.Allocator) *js.ZigException.Holder {
-        var holder = try allocator.create(js.ZigException.Holder);
-        holder.* = js.ZigException.Holder.init();
-        var zig_exception: *js.ZigException = holder.zigException();
-        zig_exception.exception = this;
-        zig_exception.code = js.JSErrorCode.BundlerError;
-        return holder;
-    }
 };
 
 pub inline fn usize2Loc(loc: usize) Loc {
@@ -1330,8 +1341,6 @@ pub inline fn usize2Loc(loc: usize) Loc {
 }
 
 pub const Source = struct {
-    pub const Index = @import("./ast/base.zig").Index;
-
     path: fs.Path,
 
     contents: string,
@@ -1583,3 +1592,22 @@ pub const Source = struct {
 pub fn rangeData(source: ?*const Source, r: Range, text: string) Data {
     return Data{ .text = text, .location = Location.initOrNull(source, r) };
 }
+
+const string = []const u8;
+
+const fs = @import("./fs.zig");
+const std = @import("std");
+const ImportKind = @import("./import_record.zig").ImportKind;
+
+const bun = @import("bun");
+const Environment = bun.Environment;
+const JSError = bun.JSError;
+const OOM = bun.OOM;
+const Output = bun.Output;
+const StringBuilder = bun.StringBuilder;
+const assert = bun.assert;
+const default_allocator = bun.default_allocator;
+const jsc = bun.jsc;
+const strings = bun.strings;
+const Index = bun.ast.Index;
+const api = bun.schema.api;

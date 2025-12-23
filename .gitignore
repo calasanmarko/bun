@@ -1,7 +1,9 @@
+.claude/settings.local.json
 .DS_Store
 .env
 .envrc
 .eslintcache
+.gdb_history
 .idea
 .next
 .ninja_deps
@@ -36,6 +38,7 @@
 *.out.refresh.js
 *.pdb
 *.sqlite
+*.swp
 *.tmp
 *.trace
 *.wat
@@ -153,6 +156,7 @@ test/cli/install/registry/packages/publish-pkg-*
 test/cli/install/registry/packages/@secret/publish-pkg-8
 test/js/third_party/prisma/prisma/sqlite/dev.db-journal
 tmp
+codegen-for-zig-team.tar.gz
 
 # Dependencies
 /vendor
@@ -181,3 +185,10 @@ tmp
 .buildkite/ci.yml
 *.sock
 scratch*.{js,ts,tsx,cjs,mjs}
+
+*.bun-build
+
+scripts/lldb-inline
+
+# We regenerate these in all the build scripts
+cmake/sources/*.txt

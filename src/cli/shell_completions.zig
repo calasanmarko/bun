@@ -1,15 +1,3 @@
-const std = @import("std");
-const bun = @import("root").bun;
-const string = bun.string;
-const Output = bun.Output;
-const Global = bun.Global;
-const Environment = bun.Environment;
-const strings = bun.strings;
-const MutableString = bun.MutableString;
-const stringZ = bun.stringZ;
-const default_allocator = bun.default_allocator;
-const C = bun.C;
-
 pub const Shell = enum {
     unknown,
     bash,
@@ -79,3 +67,9 @@ pub fn print(this: @This()) void {
         }
     }
 }
+
+const std = @import("std");
+
+const bun = @import("bun");
+const Output = bun.Output;
+const strings = bun.strings;

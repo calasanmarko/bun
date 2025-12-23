@@ -25,7 +25,7 @@ export default class RoundRobinHandle {
     this.key = key;
     this.all = new Map();
     this.free = new Map();
-    this.handles = init({ __proto__: null });
+    this.handles = init(Object.create(null));
     this.handle = null;
     this.server = net.createServer(assert_fail);
 
@@ -35,7 +35,7 @@ export default class RoundRobinHandle {
         port,
         host: address,
         // Currently, net module only supports `ipv6Only` option in `flags`.
-        ipv6Only: Boolean(flags & UV_TCP_IPV6ONLY),
+        ipv6Only: !!(flags & UV_TCP_IPV6ONLY),
         backlog,
       });
     } else

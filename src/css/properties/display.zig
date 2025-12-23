@@ -1,31 +1,7 @@
-const std = @import("std");
-const bun = @import("root").bun;
-const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayListUnmanaged;
-
 pub const css = @import("../css_parser.zig");
 
-const SmallList = css.SmallList;
 const Printer = css.Printer;
 const PrintErr = css.PrintErr;
-const Error = css.Error;
-
-const ContainerName = css.css_rules.container.ContainerName;
-
-const LengthPercentage = css.css_values.length.LengthPercentage;
-const CustomIdent = css.css_values.ident.CustomIdent;
-const CSSString = css.css_values.string.CSSString;
-const CSSNumber = css.css_values.number.CSSNumber;
-const LengthPercentageOrAuto = css.css_values.length.LengthPercentageOrAuto;
-const Size2D = css.css_values.size.Size2D;
-const DashedIdent = css.css_values.ident.DashedIdent;
-const Image = css.css_values.image.Image;
-const CssColor = css.css_values.color.CssColor;
-const Ratio = css.css_values.ratio.Ratio;
-const Length = css.css_values.length.LengthValue;
-const Rect = css.css_values.rect.Rect;
-const NumberOrPercentage = css.css_values.percentage.NumberOrPercentage;
-const CustomIdentList = css.css_values.ident.CustomIdentList;
 
 /// A value for the [display](https://drafts.csswg.org/css-display-3/#the-display-properties) property.
 pub const Display = union(enum) {
@@ -34,8 +10,8 @@ pub const Display = union(enum) {
     /// The inside and outside display values.
     pair: DisplayPair,
 
-    pub usingnamespace css.DeriveParse(@This());
-    pub usingnamespace css.DeriveToCss(@This());
+    pub const parse = css.DeriveParse(@This()).parse;
+    pub const toCss = css.DeriveToCss(@This()).toCss;
 
     pub fn deepClone(this: *const @This(), allocator: std.mem.Allocator) @This() {
         return css.implementDeepClone(@This(), this, allocator);
@@ -59,7 +35,12 @@ pub const Visibility = enum {
     /// The element is collapsed.
     collapse,
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 /// A `display` keyword.
@@ -81,7 +62,12 @@ pub const DisplayKeyword = enum {
     @"ruby-base-container",
     @"ruby-text-container",
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 /// A pair of inside and outside display values, as used in the `display` property.
@@ -167,20 +153,20 @@ pub const DisplayPair = struct {
         return .{ .err = location.newUnexpectedTokenError(.{ .ident = ident }) };
     }
 
-    pub fn toCss(this: *const DisplayPair, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const DisplayPair, dest: *css.Printer) css.PrintErr!void {
         if (this.outside == .@"inline" and this.inside == .flow_root and !this.is_list_item) {
             return dest.writeStr("inline-block");
         } else if (this.outside == .@"inline" and this.inside == .table and !this.is_list_item) {
             return dest.writeStr("inline-table");
         } else if (this.outside == .@"inline" and this.inside == .flex and !this.is_list_item) {
-            try this.inside.flex.toCss(W, dest);
-            if (this.inside.flex.eql(css.VendorPrefix{ .ms = true })) {
+            try this.inside.flex.toCss(dest);
+            if (this.inside.flex == css.VendorPrefix{ .ms = true }) {
                 return dest.writeStr("inline-flexbox");
             } else {
                 return dest.writeStr("inline-flex");
             }
         } else if (this.outside == .@"inline" and this.inside == .box and !this.is_list_item) {
-            try this.inside.box.toCss(W, dest);
+            try this.inside.box.toCss(dest);
             return dest.writeStr("inline-box");
         } else if (this.outside == .@"inline" and this.inside == .grid and !this.is_list_item) {
             return dest.writeStr("inline-grid");
@@ -192,7 +178,7 @@ pub const DisplayPair = struct {
 
             var needs_space = false;
             if (!this.outside.eql(&default_outside) or (this.inside.eql(&DisplayInside{ .flow = {} }) and !this.is_list_item)) {
-                try this.outside.toCss(W, dest);
+                try this.outside.toCss(dest);
                 needs_space = true;
             }
 
@@ -200,7 +186,7 @@ pub const DisplayPair = struct {
                 if (needs_space) {
                     try dest.writeChar(' ');
                 }
-                try this.inside.toCss(W, dest);
+                try this.inside.toCss(dest);
                 needs_space = true;
             }
 
@@ -224,7 +210,12 @@ pub const DisplayOutside = enum {
     @"inline",
     @"run-in",
 
-    pub usingnamespace css.DefineEnumProperty(@This());
+    const css_impl = css.DefineEnumProperty(@This());
+    pub const eql = css_impl.eql;
+    pub const hash = css_impl.hash;
+    pub const parse = css_impl.parse;
+    pub const toCss = css_impl.toCss;
+    pub const deepClone = css_impl.deepClone;
 };
 
 /// A [`<display-inside>`](https://drafts.csswg.org/css-display-3/#typedef-display-inside) value.
@@ -264,21 +255,21 @@ pub const DisplayInside = union(enum) {
         return .{ .err = location.newUnexpectedTokenError(.{ .ident = ident }) };
     }
 
-    pub fn toCss(this: *const DisplayInside, comptime W: type, dest: *css.Printer(W)) css.PrintErr!void {
+    pub fn toCss(this: *const DisplayInside, dest: *css.Printer) css.PrintErr!void {
         switch (this.*) {
             .flow => try dest.writeStr("flow"),
             .flow_root => try dest.writeStr("flow-root"),
             .table => try dest.writeStr("table"),
             .flex => |prefix| {
-                try prefix.toCss(W, dest);
-                if (prefix.eql(css.VendorPrefix{ .ms = true })) {
+                try prefix.toCss(dest);
+                if (prefix == css.VendorPrefix{ .ms = true }) {
                     try dest.writeStr("flexbox");
                 } else {
                     try dest.writeStr("flex");
                 }
             },
             .box => |prefix| {
-                try prefix.toCss(W, dest);
+                try prefix.toCss(dest);
                 try dest.writeStr("box");
             },
             .grid => try dest.writeStr("grid"),
@@ -290,3 +281,7 @@ pub const DisplayInside = union(enum) {
         return css.implementEql(@This(), lhs, rhs);
     }
 };
+
+const bun = @import("bun");
+const std = @import("std");
+const Allocator = std.mem.Allocator;

@@ -39,6 +39,7 @@ struct BackPressure {
         /* Always erase a minimum of 1/32th the current backpressure */
         if (pendingRemoval > (buffer.length() >> 5)) {
             buffer.erase(0, pendingRemoval);
+            buffer.shrink_to_fit();
             pendingRemoval = 0;
         }
     }
@@ -80,8 +81,10 @@ struct AsyncSocketData {
 
     }
 
-    /* Or emppty */
+    /* Or empty */
     AsyncSocketData() = default;
+    bool isIdle = false;
+    bool isAuthorized = false; // per-socket TLS authorization status
 };
 
 }

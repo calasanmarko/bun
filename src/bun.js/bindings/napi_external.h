@@ -2,10 +2,11 @@
 
 #pragma once
 
+#include "napi_finalizer.h"
 #include "root.h"
 
-#include "BunBuiltinNames.h"
 #include "BunClientData.h"
+#include "napi.h"
 
 namespace Bun {
 
@@ -21,8 +22,9 @@ class NapiExternal : public JSC::JSDestructibleObject {
     using Base = JSC::JSDestructibleObject;
 
 public:
-    NapiExternal(JSC::VM& vm, JSC::Structure* structure)
+    NapiExternal(JSC::VM& vm, JSC::Structure* structure, WTF::RefPtr<NapiEnv> env)
         : Base(vm, structure)
+        , m_env(env)
     {
     }
 
@@ -52,13 +54,13 @@ public:
             JSC::TypeInfo(JSC::ObjectType, StructureFlags), info());
     }
 
-    static NapiExternal* create(JSC::VM& vm, JSC::Structure* structure, void* value, void* finalizer_hint, void* finalizer)
+    static NapiExternal* create(JSC::VM& vm, JSC::Structure* structure, void* value, void* finalizer_hint, napi_finalize callback, WTF::RefPtr<NapiEnv> env = nullptr)
     {
-        NapiExternal* accessor = new (NotNull, JSC::allocateCell<NapiExternal>(vm)) NapiExternal(vm, structure);
+        NapiExternal* accessor = new (NotNull, JSC::allocateCell<NapiExternal>(vm)) NapiExternal(vm, structure, env);
 
-        accessor->finishCreation(vm, value, finalizer_hint, finalizer);
+        accessor->finishCreation(vm, value, finalizer_hint, callback);
 
-#if BUN_DEBUG
+#if ASSERT_ENABLED
         if (auto* callFrame = vm.topCallFrame) {
             auto origin = callFrame->callerSourceOrigin(vm);
             accessor->sourceOriginURL = origin.string();
@@ -80,13 +82,11 @@ public:
         return accessor;
     }
 
-    void finishCreation(JSC::VM& vm, void* value, void* finalizer_hint, void* finalizer)
+    void finishCreation(JSC::VM& vm, void* value, void* finalizer_hint, napi_finalize callback)
     {
         Base::finishCreation(vm);
         m_value = value;
-        m_finalizerHint = finalizer_hint;
-        napi_env = this->globalObject();
-        this->finalizer = finalizer;
+        m_finalizer = NapiFinalizer { callback, finalizer_hint };
     }
 
     static void destroy(JSC::JSCell* cell);
@@ -94,11 +94,10 @@ public:
     void* value() const { return m_value; }
 
     void* m_value;
-    void* m_finalizerHint;
-    void* finalizer;
-    JSGlobalObject* napi_env;
+    NapiFinalizer m_finalizer;
+    WTF::RefPtr<NapiEnv> m_env;
 
-#if BUN_DEBUG
+#if ASSERT_ENABLED
     String sourceOriginURL = String();
     unsigned sourceOriginLine = 0;
     unsigned sourceOriginColumn = 0;
